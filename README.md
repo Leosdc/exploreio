@@ -56,3 +56,15 @@ exploreio -p index.html -m reader -t parchment
 | **Leitor (JSON Tree)** | `Enter`/`←`/`→` · `e`/`c` | Abrir/fechar nó selecionado · expandir/recolher tudo |
 | **Leitor** | `/` · `n`/`N` | Buscar texto no arquivo e navegar ocorrências |
 | **Global** | `t` · `?` · `Esc`/`q` | Trocar tema · Ajuda · Voltar/Sair |
+
+## 💡 Dica: Usando em Split no Windows Terminal
+
+O layout do **Exploreio** se adapta ao vivo à largura do painel (`≥ 96` colunas exibe **3 painéis**; `60–95` colunas exibe **2 painéis**). Para abrir e ajustar painéis lado a lado no **Windows Terminal**:
+
+| Atalho | Ação |
+| :--- | :--- |
+| `Alt + Shift + +` | Abrir novo painel vertical lado a lado (split) |
+| `Alt + Shift + -` | Abrir novo painel horizontal |
+| `Alt + Shift + ←`/`→`/`↑`/`↓` | Redimensionar o painel ativo (alterna 2 ↔ 3 painéis ao vivo) |
+| `Alt + ←`/`→`/`↑`/`↓` | Alternar foco entre painéis sem usar o mouse |
+| `Ctrl + Shift + W` | Fechar o painel ativo |
