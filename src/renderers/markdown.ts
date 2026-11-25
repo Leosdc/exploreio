@@ -18,6 +18,7 @@ import {
   wrapAnsi,
 } from '../tui/ansi.js';
 import { highlightCodeLine, normalizeLangAlias, renderCodeLines } from './code.js';
+import { renderMermaid } from './mermaid.js';
 
 function styleInlineMarkdown(text: string, theme: ThemePalette): string {
   const safe = stripUnsafeAnsi(text);
@@ -130,11 +131,31 @@ export function renderMarkdown(
       continue;
     }
 
-    // Bloco de código cercado ```lang ... ```
+    // Bloco de código cercado ```lang ... ``` (com suporte nativo a ```mermaid)
     const fenceMatch = trimmed.match(/^(`{3,}|~{3,})\s*([a-zA-Z0-9_+-]*)/);
     if (fenceMatch) {
       const fence = fenceMatch[1] ?? '```';
       const langRaw = fenceMatch[2] ?? '';
+
+      if (langRaw.toLowerCase() === 'mermaid') {
+        i++;
+        const mermaidLines: string[] = [];
+        while (i < rawLines.length && !(rawLines[i] ?? '').trim().startsWith(fence)) {
+          mermaidLines.push(rawLines[i] ?? '');
+          i++;
+        }
+        out.push(
+          ...renderMermaid(mermaidLines.join('\n'), {
+            width: safeWidth,
+            theme,
+            mode: 'rendered',
+            embedded: true,
+          })
+        );
+        i++;
+        continue;
+      }
+
       const lang = normalizeLangAlias(langRaw);
       const badge = langRaw ? ` ${langRaw.toUpperCase()} ` : ' CODE ';
       const barLen = Math.max(2, safeWidth - badge.length - 4);

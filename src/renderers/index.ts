@@ -12,8 +12,9 @@ import { detectLanguageFromPath, renderCodeLines } from './code.js';
 import { renderHtmlDocument } from './html.js';
 import { renderJsonDocument, type JsonTreeRow } from './json.js';
 import { renderMarkdown } from './markdown.js';
+import { renderMermaid } from './mermaid.js';
 
-export type DocumentKind = 'markdown' | 'json' | 'html' | 'code' | 'text' | 'binary';
+export type DocumentKind = 'markdown' | 'mermaid' | 'json' | 'html' | 'code' | 'text' | 'binary';
 
 export type ViewMode = 'rendered' | 'raw' | 'tree' | 'pretty' | 'reader' | 'source' | 'code' | 'hex';
 
@@ -30,6 +31,7 @@ export function detectDocumentKind(filePath: string, isBinary: boolean): Documen
   if (isBinary) return 'binary';
   const ext = path.extname(filePath).toLowerCase();
   if (ext === '.md' || ext === '.mdx' || ext === '.markdown') return 'markdown';
+  if (ext === '.mmd' || ext === '.mermaid') return 'mermaid';
   if (ext === '.json' || ext === '.jsonc') return 'json';
   if (ext === '.html' || ext === '.htm' || ext === '.xhtml') return 'html';
   const lang = detectLanguageFromPath(filePath);
@@ -40,6 +42,7 @@ export function detectDocumentKind(filePath: string, isBinary: boolean): Documen
 export function getModesForKind(kind: DocumentKind): readonly ViewMode[] {
   switch (kind) {
     case 'markdown':
+    case 'mermaid':
       return ['rendered', 'raw'];
     case 'json':
       return ['tree', 'pretty'];
@@ -174,6 +177,14 @@ export function renderDocument(preview: SafeFilePreview, options: RenderDocument
   } else if (kind === 'markdown') {
     lines = renderMarkdown(preview.text, width, theme, activeMode === 'raw' ? 'raw' : 'rendered');
     badge = activeMode === 'raw' ? 'MD · RAW' : 'MD · RENDERED';
+  } else if (kind === 'mermaid') {
+    lines = renderMermaid(preview.text, {
+      width,
+      theme,
+      mode: activeMode === 'raw' ? 'raw' : 'rendered',
+      embedded: false,
+    });
+    badge = activeMode === 'raw' ? 'MERMAID · RAW' : 'MERMAID · DIAGRAM';
   } else if (kind === 'json') {
     const res = renderJsonDocument(
       preview.text,

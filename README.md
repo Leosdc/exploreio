@@ -6,7 +6,8 @@ Um gerenciador de arquivos para CLI/terminal inspirado no **Yazi**, projetado pa
 
 - **Layout 3 Painéis estilo Yazi:** `Diretório Pai` | `Diretório Atual` | `Preview Rico ao Vivo` (responsivo para terminais estreitos).
 - **Leitor Fullscreen Nativo no Prompt (`Enter`):**
-  - **Markdown (`.md`, `.mdx`):** títulos estilizados, negrito/itálico/tachado, código inline, links, checklists (`☑`/`☐`), callouts GitHub (`[!NOTE]`, `[!TIP]`, `[!WARNING]`), tabelas Unicode alinhadas e blocos de código com syntax highlighting + toggle `Tab` (*Rendered* ↔ *Raw*).
+  - **Markdown (`.md`, `.mdx`):** títulos estilizados, negrito/itálico/tachado, código inline, links, checklists (`☑`/`☐`), callouts GitHub (`[!NOTE]`, `[!TIP]`, `[!WARNING]`), tabelas Unicode alinhadas, **diagramas Mermaid renderizados inline** e blocos de código com syntax highlighting + toggle `Tab` (*Rendered* ↔ *Raw*).
+  - **Mermaid (`.mmd`, `.mermaid`):** interpretador e renderizador nativo Unicode/ANSI (zero dependências) para `flowchart`/`graph`, `sequenceDiagram`, `stateDiagram`, `classDiagram` e `erDiagram` com adaptação à largura do terminal, fallback seguro e toggle `Tab` (*Diagram* ↔ *Raw*).
   - **JSON (`.json`):** **Tree View interativa** (recolher/expandir nós com `Enter`/`←`/`→`, `e` expande tudo, `c` recolhe tudo) + modo *Pretty Highlighted* + diagnóstico visual de JSON inválido.
   - **HTML (`.html`, `.htm`):** **Modo Reader** limpo (extrai títulos, parágrafos, listas, links, citações, blocos de código e tabelas ignorando `<script>`/`<style>`) + toggle `Tab` para *Source* colorido.
   - **Código-Fonte:** syntax highlighting multi-linguagem leve (TS/JS, Python, Rust, Go, C/C++/Java/C#, CSS, SQL, YAML, TOML, Shell/PowerShell) com números de linha.
