@@ -7,6 +7,11 @@ e este projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR
 
 ---
 
+## [0.1.1] - 2026-11-24
+
+### Documentação
+- Adicionada seção de dicas de uso em split no **Windows Terminal** (`Alt + Shift + +`, `Alt + Shift + -`, `Alt + Shift + ←/→/↑/↓`, `Alt + ←/→/↑/↓` e `Ctrl + Shift + W`) e detalhamento do comportamento responsivo de painéis (`≥ 96` colunas: 3 painéis; `60–95` colunas: 2 painéis) no `README.md` (#1).
+
 ## [0.1.0] - 2026-11-24
 
 ### Adicionado

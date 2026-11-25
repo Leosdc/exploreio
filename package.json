@@ -1,6 +1,6 @@
 {
   "name": "exploreio",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A Yazi-inspired terminal file explorer with native rich in-prompt file preview & reader for Markdown, interactive JSON, HTML, and syntax-highlighted code.",
   "type": "module",
   "bin": {
