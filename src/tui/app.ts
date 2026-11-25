@@ -6,6 +6,8 @@
  */
 
 import path from 'node:path';
+import { VimEngine } from '../editor/vimEngine.js';
+import { buildEditorFrame, type EditorViewport } from '../editor/vimView.js';
 import {
   createFileOrDir,
   deleteEntry,
@@ -13,6 +15,7 @@ import {
   readDirectoryEntries,
   renameEntry,
   safeReadFilePreview,
+  safeWriteTextFile,
   type FileEntry,
   type SafeFilePreview,
 } from '../fs/explorer.js';
@@ -29,7 +32,7 @@ import { copyTextToClipboard } from './clipboard.js';
 import { parseInputChunk, type KeyEvent } from './input.js';
 import { ScreenBuffer } from './screen.js';
 
-type AppView = 'browser' | 'reader';
+type AppView = 'browser' | 'reader' | 'editor';
 type PromptKind = null | 'filter' | 'search' | 'create' | 'rename' | 'delete';
 
 export interface ExploreioAppOptions {
@@ -91,6 +94,15 @@ export class ExploreioApp {
   private readerSearchQuery = '';
   private readerSearchMatches: number[] = [];
   private readerSearchCursor = 0;
+
+  // Editor modal estilo Vim (SPEC-002)
+  private editorEngine: VimEngine | null = null;
+  private editorFilePath = '';
+  private editorReturnView: 'browser' | 'reader' = 'browser';
+  private editorViewport: EditorViewport = { scrollY: 0, scrollX: 0 };
+  private editorStatusMessage = '';
+  private editorStatusIsError = false;
+  private editorSavedAny = false;
 
   // Prompt modal inline (barra inferior)
   private promptKind: PromptKind = null;
@@ -190,7 +202,9 @@ export class ExploreioApp {
         continue;
       }
 
-      if (this.view === 'reader') {
+      if (this.view === 'editor') {
+        await this.handleEditorKey(ev);
+      } else if (this.view === 'reader') {
         await this.handleReaderKey(ev);
       } else {
         await this.handleBrowserKey(ev);
@@ -341,6 +355,16 @@ export class ExploreioApp {
       await this.copySelectedPath();
       return;
     }
+    if (ev.char === 'e') {
+      const entry = this.currentEntries[this.selectedIndex];
+      if (entry && !entry.isDirectory) {
+        await this.openFileInEditor(entry.fullPath, 'browser');
+      } else {
+        this.toastMessage = 'Selecione um arquivo de texto para abrir no editor Vim (e).';
+        this.draw();
+      }
+      return;
+    }
 
     if (ev.name === 'up' || ev.char === 'k' || ev.name === 'wheel_up') {
       if (this.selectedIndex > 0) {
@@ -418,6 +442,10 @@ export class ExploreioApp {
     }
     if (ev.char === 'y') {
       await this.copySelectedPath();
+      return;
+    }
+    if ((ev.char === 'E' || (ev.char === 'e' && !isJsonTree)) && this.activeFilePreview) {
+      await this.openFileInEditor(this.activeFilePreview.filePath, 'reader');
       return;
     }
     if (ev.name === 'tab' && this.activeDoc && this.activeDoc.modes.length > 1) {
@@ -650,13 +678,120 @@ export class ExploreioApp {
     this.readerScroll = Math.max(0, lineNum - Math.floor(bodyHeight / 3));
   }
 
+  private async openFileInEditor(filePath: string, returnTo: 'browser' | 'reader'): Promise<void> {
+    const preview = await safeReadFilePreview(filePath);
+    if (preview.error) {
+      this.toastMessage = preview.error;
+      this.draw();
+      return;
+    }
+    if (preview.isBinary) {
+      this.toastMessage = `Edição bloqueada: arquivo binário (${preview.magicLabel}).`;
+      this.draw();
+      return;
+    }
+    if (preview.truncated) {
+      this.toastMessage = 'Edição bloqueada: arquivo excede o limite seguro de 2 MB.';
+      this.draw();
+      return;
+    }
+
+    this.editorEngine = new VimEngine(preview.text);
+    this.editorFilePath = preview.filePath;
+    this.editorReturnView = returnTo;
+    this.editorViewport = { scrollY: 0, scrollX: 0 };
+    this.editorStatusMessage = `"${path.basename(preview.filePath)}" ${this.editorEngine.buffer.lines.length}L`;
+    this.editorStatusIsError = false;
+    this.editorSavedAny = false;
+    this.view = 'editor';
+    this.draw();
+  }
+
+  private async handleEditorKey(ev: KeyEvent): Promise<void> {
+    if (!this.editorEngine) {
+      this.view = this.editorReturnView;
+      this.draw();
+      return;
+    }
+
+    const { height } = this.screen.getSize();
+    const pageSize = Math.max(4, height - 2);
+    this.editorStatusMessage = '';
+    this.editorStatusIsError = false;
+
+    const action = this.editorEngine.handleKey(ev, pageSize);
+    if (action.message) {
+      this.editorStatusMessage = action.message;
+      this.editorStatusIsError = Boolean(action.isError);
+    }
+
+    if (action.type === 'save' || action.type === 'save-and-quit') {
+      try {
+        const text = this.editorEngine.buffer.toText();
+        const { bytes } = await safeWriteTextFile(this.editorFilePath, text);
+        this.editorEngine.buffer.dirty = false;
+        this.editorSavedAny = true;
+        this.editorStatusMessage = `"${path.basename(this.editorFilePath)}" ${this.editorEngine.buffer.lines.length}L, ${bytes}B salvos`;
+        this.editorStatusIsError = false;
+        if (action.type === 'save-and-quit') {
+          await this.closeEditor();
+          return;
+        }
+      } catch (err) {
+        this.editorStatusMessage = `Erro ao salvar: ${err instanceof Error ? err.message : String(err)}`;
+        this.editorStatusIsError = true;
+      }
+    } else if (action.type === 'quit' || action.type === 'force-quit') {
+      await this.closeEditor();
+      return;
+    }
+
+    this.draw();
+  }
+
+  private async closeEditor(): Promise<void> {
+    const returnTo = this.editorReturnView;
+    const savedPath = this.editorFilePath;
+    const didSave = this.editorSavedAny;
+
+    this.editorEngine = null;
+    this.editorFilePath = '';
+    this.editorStatusMessage = '';
+    this.editorStatusIsError = false;
+    this.view = returnTo;
+
+    if (returnTo === 'reader' && didSave && savedPath) {
+      await this.openFileInReader(savedPath);
+      this.toastMessage = `Salvo: ${path.basename(savedPath)}`;
+    } else if (returnTo === 'browser') {
+      if (didSave) {
+        await this.reloadDirectory(path.basename(savedPath));
+        this.toastMessage = `Salvo: ${path.basename(savedPath)}`;
+      } else {
+        await this.refreshSelectedPreview();
+      }
+    }
+    this.draw();
+  }
+
   private draw(): void {
     const theme = getTheme(this.themeName);
     const { width, height } = this.screen.getSize();
     const lines =
-      this.view === 'reader'
-        ? this.buildReaderFrame(width, height, theme)
-        : this.buildBrowserFrame(width, height, theme);
+      this.view === 'editor' && this.editorEngine
+        ? buildEditorFrame({
+            engine: this.editorEngine,
+            filePath: this.editorFilePath,
+            width,
+            height,
+            theme,
+            viewport: this.editorViewport,
+            statusMessage: this.editorStatusMessage,
+            statusIsError: this.editorStatusIsError,
+          })
+        : this.view === 'reader'
+          ? this.buildReaderFrame(width, height, theme)
+          : this.buildBrowserFrame(width, height, theme);
 
     if (this.showHelp) {
       this.overlayHelpModal(lines, width, height, theme);
@@ -808,14 +943,14 @@ export class ExploreioApp {
     if (this.view === 'reader') {
       const isJsonTree = this.activeDoc?.kind === 'json' && this.activeDoc.activeMode === 'tree';
       const hint = isJsonTree
-        ? ' Esc Voltar · ↑↓ Navegar · Enter/←→ Nó · e/c Tudo · Tab Pretty · y Path · / Buscar · t Tema · ? Ajuda'
-        : ' Esc Voltar · ↑↓/PgUp/PgDn Rolar · Tab Modo · y Copiar Path · / Buscar (n/N) · t Tema · ? Ajuda';
+        ? ' Esc Voltar · ↑↓ Navegar · Enter/←→ Nó · e/c Tudo · E Vim · Tab Pretty · y Path · / Buscar · t Tema'
+        : ' Esc Voltar · e Editar (Vim) · ↑↓/PgUp/PgDn Rolar · Tab Modo · y Path · / Buscar · t Tema · ? Ajuda';
       return `${bg(theme.statusBg)}${fg(theme.statusFg)}${fitAnsi(hint, width)}${RESET}`;
     }
 
     const pos = this.currentEntries.length > 0 ? `${this.selectedIndex + 1}/${this.currentEntries.length}` : '0/0';
     const filterTag = this.filterQuery ? ` [filtro: ${this.filterQuery}]` : '';
-    const hint = ` ${pos}${filterTag} · Enter Abrir · ←→ Navegar · y Path · / Filtrar · . Ocultos · t Tema · a/r/d · ? Ajuda · q Sair`;
+    const hint = ` ${pos}${filterTag} · Enter Ler · e Vim · ←→ Navegar · y Path · / Filtrar · . Ocultos · t Tema · a/r/d · ? Ajuda · q Sair`;
     return `${bg(theme.statusBg)}${fg(theme.statusFg)}${fitAnsi(hint, width)}${RESET}`;
   }
 
@@ -836,8 +971,15 @@ export class ExploreioApp {
       '  Enter / ← / →    Expandir/recolher nó no JSON Tree (e=tudo, c=recolher)',
       '  /  e  n / N      Buscar texto no arquivo e saltar ocorrências',
       '  y                Copiar caminho completo do arquivo aberto',
+      '  e (ou E no JSON) Abrir arquivo no EDITOR VIM NATIVO',
       '  t                Alternar tema (Midnight · Parchment Light · Nord)',
       '  Esc ou q         Voltar ao navegador (ou sair)',
+      '',
+      '  MODO EDITOR VIM (NORMAL · INSERT · VISUAL · COMMAND)',
+      '  i/I/a/A/o/O      Entrar em INSERT (Esc volta para NORMAL)',
+      '  hjkl · w/b/e     Navegar · 0/^/$ · gg/G · Ctrl+d/u · / Buscar (n/N)',
+      '  x · dd · yy · p  Editar · v/V Visual (y/d/c) · u Undo · Ctrl+r Redo',
+      '  :w · :wq · :q!   Salvar · Salvar e sair · Sair sem salvar · :<linha>',
     ];
 
     const startRow = Math.max(1, Math.floor((height - (helpItems.length + 4)) / 2));

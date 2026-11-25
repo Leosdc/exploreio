@@ -12,6 +12,7 @@ Um gerenciador de arquivos para CLI/terminal inspirado no **Yazi**, projetado pa
   - **Código-Fonte:** syntax highlighting multi-linguagem leve (TS/JS, Python, Rust, Go, C/C++/Java/C#, CSS, SQL, YAML, TOML, Shell/PowerShell) com números de linha.
   - **Binários:** detecção de assinatura (PNG, JPEG, PDF, ZIP, WASM, ELF, EXE) + prévia segura em *Hex Dump*.
 - **Modo Direto no Prompt (`--print` / `-p`):** renderize qualquer arquivo diretamente no stdout (`exploreio -p README.md`).
+- **Editor Modal Estilo Vim Nativo (`e`):** edite qualquer arquivo de texto/código diretamente dentro do Exploreio com modos `NORMAL`, `INSERT`, `VISUAL`/`V-LINE`, `COMMAND` (`:w`, `:wq`, `:q!`, `:<linha>`) e `SEARCH` (`/`), undo/redo (`u`/`Ctrl+r`), syntax highlighting e preservação de EOL (`\r\n`/`\n`).
 - **3 Temas Oficiais de Terminal (`t`):** `midnight`, `parchment` (claro) e `nord` com detecção Truecolor / ANSI 256.
 - **Seguro por Padrão:** sanitização anti-ANSI-injection, limite de 2 MB contra OOM e confirmação obrigatória para exclusões.
 
@@ -52,6 +53,10 @@ exploreio -p index.html -m reader -t parchment
 | **Navegador** | `.` | Alternar arquivos ocultos |
 | **Navegador / Leitor** | `y` | Copiar caminho completo selecionado (arquivo ou pasta) |
 | **Navegador** | `a` / `r` / `d` | Criar / Renomear / Excluir (com confirmação) |
+| **Navegador / Leitor** | `e` *(ou `E` no JSON Tree)* | Abrir arquivo no **Editor Modal Estilo Vim Nativo** |
+| **Editor Vim** | `i`/`I`/`a`/`A`/`o`/`O` · `Esc` | Entrar em `INSERT` · voltar para `NORMAL` |
+| **Editor Vim** | `v`/`V` · `dd`/`yy`/`p` · `u`/`Ctrl+r` | Seleção Visual · deletar/copiar/colar · Undo/Redo |
+| **Editor Vim** | `:w` · `:wq` · `:q!` · `:<linha>` | Salvar · salvar e sair · descartar · ir para linha |
 | **Leitor** | `Tab` | Alternar visualização (*Rendered↔Raw*, *Tree↔Pretty*, *Reader↔Source*) |
 | **Leitor (JSON Tree)** | `Enter`/`←`/`→` · `e`/`c` | Abrir/fechar nó selecionado · expandir/recolher tudo |
 | **Leitor** | `/` · `n`/`N` | Buscar texto no arquivo e navegar ocorrências |
