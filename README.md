@@ -23,10 +23,10 @@ Um gerenciador de arquivos para CLI/terminal inspirado no **Yazi**, projetado pa
 
 ```bash
 # Instalação global (ativa os comandos `exploreio` e `exp`)
-npm install -g exploreio
+npm install -g @leosdc/exploreio
 
 # Ou execute sem instalar
-npx exploreio
+npx @leosdc/exploreio
 ```
 
 Depois disso, basta abrir **qualquer pasta** no Windows Terminal, PowerShell, CMD, macOS ou Linux e rodar:
