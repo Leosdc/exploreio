@@ -7,10 +7,10 @@ e este projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR
 
 ---
 
-## [Unreleased / Dev]
+## [0.3.0] - 2026-11-25
 
 ### Adicionado
-- **Interpretador e Renderizador Nativo de Mermaid (`.mmd`, `.mermaid` e blocos ```` ```mermaid ```` em Markdown):** parser AST zero-dependências (`src/renderers/mermaidParser.ts`) e motor de layout Unicode/ANSI multi-tema (`src/renderers/mermaid.ts`) com suporte a `flowchart`/`graph` (`TD`/`TB`/`LR`/`RL`/`BT`, formas de nós, rótulos de arestas, `subgraph` e detecção segura de ciclos), `sequenceDiagram` (lifelines, setas, notas, blocos `alt`/`else`/`loop` e modo compacto), `stateDiagram-v2`, `classDiagram` e `erDiagram`, com degradação segura (fail-safe), limites anti-OOM e sanitização anti-ANSI-injection nos 3 temas oficiais (#8).
+- **Interpretador e Renderizador Nativo de Mermaid (`.mmd`, `.mermaid` e blocos ```` ```mermaid ```` em Markdown):** parser AST zero-dependências (`src/renderers/mermaidParser.ts`) e motor de layout Unicode/ANSI multi-tema (`src/renderers/mermaid.ts`) com suporte a `flowchart`/`graph` (`TD`/`TB`/`LR`/`RL`/`BT`, formas de nós, rótulos de arestas, `subgraph` e detecção segura de ciclos), `sequenceDiagram` (lifelines, setas, notas, blocos `alt`/`else`/`loop` e modo compacto), `stateDiagram-v2`, `classDiagram` e `erDiagram`, com degradação segura (fail-safe), limites anti-OOM e sanitização anti-ANSI-injection nos 3 temas oficiais (#8, #9).
 
 ## [0.2.0] - 2026-11-25
 
