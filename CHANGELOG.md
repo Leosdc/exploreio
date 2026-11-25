@@ -7,6 +7,11 @@ e este projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR
 
 ---
 
+## [Unreleased / Dev]
+
+### Alterado
+- **Renderizador Mermaid atualizado para o motor 2D `@leosdc/termaid`:** substitui o layout linear anterior pelo motor 2D completo (Sugiyama layering, redução de cruzamentos, roteamento ortogonal de arestas no `Grid2D`, subgraphs reais e back-edges laterais) em arquivos `.mmd`/`.mermaid` e blocos ```` ```mermaid ```` embutidos em `.md`, removendo o parser duplicado interno.
+
 ## [0.3.0] - 2026-11-25
 
 ### Adicionado
