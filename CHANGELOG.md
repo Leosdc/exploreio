@@ -7,6 +7,11 @@ e este projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR
 
 ---
 
+## [Unreleased / Dev]
+
+### Adicionado
+- **Editor Modal Estilo Vim Nativo (`e` no Navegador/Leitor, `E` no JSON Tree):** suporte completo aos modos `NORMAL`, `INSERT`, `VISUAL`, `VISUAL LINE`, `COMMAND` e `SEARCH`, motions (`hjkl`, `w/b/e`, `0/^/$`, `gg/G`, `Ctrl+d/u`, contagem numérica), operadores (`i/I/a/A/o/O`, `x`, `dd`, `yy`, `p/P`, `r`, `J`, `D`, `C`, `cc`, `u`/`Ctrl+r`), comandos (`:w`, `:q`, `:wq`, `:x`, `:q!`, `:<linha>`, `:set nu/nonu`), preservação de EOL (`\r\n`/`\n`), sanitização anti-ANSI-injection e conformidade total com os 3 temas oficiais (#4).
+
 ## [0.1.1] - 2026-11-24
 
 ### Documentação
