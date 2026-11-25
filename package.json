@@ -1,6 +1,6 @@
 {
   "name": "exploreio",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "A Yazi-inspired terminal file explorer with native rich in-prompt file preview & reader for Markdown, interactive JSON, HTML, and syntax-highlighted code.",
   "type": "module",
   "bin": {
@@ -35,6 +35,14 @@
   ],
   "author": "Leonardo da Cruz (@Leosdc)",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Leosdc/exploreio.git"
+  },
+  "homepage": "https://github.com/Leosdc/exploreio#readme",
+  "bugs": {
+    "url": "https://github.com/Leosdc/exploreio/issues"
+  },
   "engines": {
     "node": ">=20.0.0"
   },

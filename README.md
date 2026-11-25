@@ -18,12 +18,15 @@ Um gerenciador de arquivos para CLI/terminal inspirado no **Yazi**, projetado pa
 
 ## 🚀 Instalação & Comandos Globais (`exploreio` / `exp`)
 
-```bash
-npm install
-npm run setup
-```
+### Via npm (Recomendado)
 
-O assistente `npm run setup` (também acionado automaticamente ao instalar em terminal interativo) pergunta se você deseja ativar os comandos globais **`exploreio`** e **`exp`** via `npm link` e permite escolher seu tema padrão (`midnight`, `parchment` ou `nord`), salvo em `~/.exploreiorc.json`.
+```bash
+# Instalação global (ativa os comandos `exploreio` e `exp`)
+npm install -g exploreio
+
+# Ou execute sem instalar
+npx exploreio
+```
 
 Depois disso, basta abrir **qualquer pasta** no Windows Terminal, PowerShell, CMD, macOS ou Linux e rodar:
 
@@ -40,7 +43,14 @@ exploreio -p package.json -m tree -t nord
 exploreio -p index.html -m reader -t parchment
 ```
 
-*(Também pode ser instalado globalmente direto via npm/GitHub: `npm install -g github:Leosdc/exploreio`.)*
+### A partir do código-fonte (Desenvolvimento Local)
+
+```bash
+npm install
+npm run setup
+```
+
+O assistente `npm run setup` (também acionado automaticamente ao instalar localmente em terminal interativo) pergunta se você deseja ativar os comandos globais **`exploreio`** e **`exp`** via `npm link` e permite escolher seu tema padrão (`midnight`, `parchment` ou `nord`), salvo em `~/.exploreiorc.json`.
 
 ## ⌨️ Principais Atalhos
 
