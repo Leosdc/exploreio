@@ -1,6 +1,6 @@
 {
   "name": "@leosdc/exploreio",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "A Yazi-inspired terminal file explorer with native rich in-prompt file preview & reader for Markdown, interactive JSON, HTML, and syntax-highlighted code.",
   "type": "module",
   "bin": {
