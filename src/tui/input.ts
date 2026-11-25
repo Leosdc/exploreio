@@ -107,6 +107,10 @@ export function parseInputChunk(raw: string): KeyEvent[] {
     } else if (code === 127 || code === 8) {
       events.push({ name: 'backspace' });
       i++;
+    } else if (code >= 1 && code <= 26) {
+      const letter = String.fromCharCode(code + 96);
+      events.push({ name: letter, ctrl: true });
+      i++;
     } else if (code === 32) {
       events.push({ name: 'space', char: ' ' });
       i++;

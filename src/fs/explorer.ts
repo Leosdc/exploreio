@@ -233,3 +233,13 @@ export async function deleteEntry(entryPath: string): Promise<void> {
   }
   await fs.rm(resolved, { recursive: true, force: false });
 }
+
+export async function safeWriteTextFile(filePath: string, content: string): Promise<{ bytes: number }> {
+  const resolved = path.resolve(filePath);
+  const bytes = Buffer.byteLength(content, 'utf8');
+  if (bytes > MAX_PREVIEW_BYTES) {
+    throw new Error('Arquivo excede o limite seguro de 2 MB para salvamento no editor embutido.');
+  }
+  await fs.writeFile(resolved, content, 'utf8');
+  return { bytes };
+}
