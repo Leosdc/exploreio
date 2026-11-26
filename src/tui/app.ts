@@ -29,6 +29,7 @@ import {
 import { bg, fg, getTheme, nextTheme, type ThemeName, type ThemePalette } from '../themes/palette.js';
 import { BOLD, DIM, ITALIC, RESET, fitAnsi, highlightSearch, stripUnsafeAnsi, truncateAnsi, visibleLength } from './ansi.js';
 import { copyTextToClipboard } from './clipboard.js';
+import { openInFullscreenShell } from './fullscreenLauncher.js';
 import { parseInputChunk, type KeyEvent } from './input.js';
 import { ScreenBuffer } from './screen.js';
 
@@ -38,6 +39,8 @@ type PromptKind = null | 'filter' | 'search' | 'create' | 'rename' | 'delete';
 export interface ExploreioAppOptions {
   readonly startDir: string;
   readonly initialFile?: string;
+  readonly initialMode?: ViewMode;
+  readonly singleFile?: boolean;
   readonly themeName?: ThemeName;
   readonly showHidden?: boolean;
 }
@@ -69,6 +72,8 @@ function getFileBadge(entry: FileEntry, theme: ThemePalette): string {
 
 export class ExploreioApp {
   private readonly screen = new ScreenBuffer();
+  private readonly initialMode?: ViewMode;
+  private readonly singleFile: boolean;
   private themeName: ThemeName;
   private view: AppView = 'browser';
   private showHidden: boolean;
@@ -112,6 +117,8 @@ export class ExploreioApp {
 
   constructor(options: ExploreioAppOptions) {
     this.currentDir = path.resolve(options.startDir);
+    this.initialMode = options.initialMode;
+    this.singleFile = Boolean(options.singleFile);
     this.themeName = options.themeName ?? 'midnight';
     this.showHidden = Boolean(options.showHidden);
     if (options.initialFile) {
@@ -149,7 +156,7 @@ export class ExploreioApp {
         const resolved = path.resolve(initialFile);
         const idx = this.currentEntries.findIndex((e) => e.fullPath === resolved);
         if (idx >= 0) this.selectedIndex = idx;
-        await this.openFileInReader(resolved);
+        await this.openFileInReader(resolved, this.initialMode);
       }
       this.draw();
     } catch (err) {
@@ -355,6 +362,16 @@ export class ExploreioApp {
       await this.copySelectedPath();
       return;
     }
+    if (ev.char === 'o' || ev.char === 'F') {
+      const entry = this.currentEntries[this.selectedIndex];
+      if (entry && !entry.isDirectory) {
+        await this.openInFullscreenTerminal(entry.fullPath);
+      } else {
+        this.toastMessage = 'Selecione um arquivo para abrir em terminal tela cheia (o).';
+        this.draw();
+      }
+      return;
+    }
     if (ev.char === 'e') {
       const entry = this.currentEntries[this.selectedIndex];
       if (entry && !entry.isDirectory) {
@@ -421,6 +438,10 @@ export class ExploreioApp {
     const isJsonTree = this.activeDoc?.kind === 'json' && this.activeDoc.activeMode === 'tree';
 
     if (ev.name === 'escape' || ev.char === 'q' || ev.name === 'backspace') {
+      if (this.singleFile) {
+        this.shutdown();
+        process.exit(0);
+      }
       this.view = 'browser';
       this.readerSearchQuery = '';
       this.readerSearchMatches = [];
@@ -442,6 +463,10 @@ export class ExploreioApp {
     }
     if (ev.char === 'y') {
       await this.copySelectedPath();
+      return;
+    }
+    if ((ev.char === 'o' || ev.char === 'F') && this.activeFilePreview) {
+      await this.openInFullscreenTerminal(this.activeFilePreview.filePath, this.activeDoc?.activeMode);
       return;
     }
     if ((ev.char === 'E' || (ev.char === 'e' && !isJsonTree)) && this.activeFilePreview) {
@@ -633,9 +658,22 @@ export class ExploreioApp {
     this.previewLines = doc.lines;
   }
 
-  private async openFileInReader(filePath: string): Promise<void> {
+  private async openInFullscreenTerminal(filePath: string, viewMode?: ViewMode): Promise<void> {
+    const result = await openInFullscreenShell(filePath, {
+      themeName: this.themeName,
+      viewMode,
+    });
+    if (result.ok) {
+      this.toastMessage = `Aberto em terminal tela cheia: ${stripUnsafeAnsi(path.basename(filePath))}`;
+    } else {
+      this.toastMessage = `Falha ao abrir tela cheia: ${stripUnsafeAnsi(result.error ?? 'terminal indisponível')}`;
+    }
+    this.draw();
+  }
+
+  private async openFileInReader(filePath: string, initialMode?: ViewMode): Promise<void> {
     this.activeFilePreview = await safeReadFilePreview(filePath);
-    this.preferredMode = undefined;
+    this.preferredMode = initialMode;
     this.collapsedJsonPaths.clear();
     this.readerScroll = 0;
     this.readerCursor = 0;
@@ -942,15 +980,16 @@ export class ExploreioApp {
 
     if (this.view === 'reader') {
       const isJsonTree = this.activeDoc?.kind === 'json' && this.activeDoc.activeMode === 'tree';
+      const exitLabel = this.singleFile ? 'Esc/q Fechar' : 'Esc Voltar';
       const hint = isJsonTree
-        ? ' Esc Voltar · ↑↓ Navegar · Enter/←→ Nó · e/c Tudo · E Vim · Tab Pretty · y Path · / Buscar · t Tema'
-        : ' Esc Voltar · e Editar (Vim) · ↑↓/PgUp/PgDn Rolar · Tab Modo · y Path · / Buscar · t Tema · ? Ajuda';
+        ? ` ${exitLabel} · ↑↓ Navegar · Enter/←→ Nó · e/c Tudo · o Tela cheia · E Vim · Tab Pretty · y Path · / Buscar · t Tema`
+        : ` ${exitLabel} · o Tela cheia · e Vim · ↑↓/PgUp/PgDn Rolar · Tab Modo · y Path · / Buscar · t Tema · ? Ajuda`;
       return `${bg(theme.statusBg)}${fg(theme.statusFg)}${fitAnsi(hint, width)}${RESET}`;
     }
 
     const pos = this.currentEntries.length > 0 ? `${this.selectedIndex + 1}/${this.currentEntries.length}` : '0/0';
     const filterTag = this.filterQuery ? ` [filtro: ${this.filterQuery}]` : '';
-    const hint = ` ${pos}${filterTag} · Enter Ler · e Vim · ←→ Navegar · y Path · / Filtrar · . Ocultos · t Tema · a/r/d · ? Ajuda · q Sair`;
+    const hint = ` ${pos}${filterTag} · Enter Ler · o Tela cheia · e Vim · ←→ Navegar · y Path · / Filtrar · t Tema · ? Ajuda · q Sair`;
     return `${bg(theme.statusBg)}${fg(theme.statusFg)}${fitAnsi(hint, width)}${RESET}`;
   }
 
@@ -966,8 +1005,9 @@ export class ExploreioApp {
       '  y                Copiar caminho selecionado (arquivo ou pasta)',
       '  a / r / d        Criar / Renomear / Excluir (com confirmação)',
       '',
-      '  MODO LEITOR FULLSCREEN (Markdown · JSON · HTML · Código)',
+      '  MODO LEITOR FULLSCREEN (Markdown · Mermaid · JSON · HTML · Código)',
       '  Tab              Alternar modo (Rendered↔Raw | Tree↔Pretty | Reader↔Source)',
+      '  o ou F           Abrir arquivo em novo terminal TELA CHEIA (ideal p/ split)',
       '  Enter / ← / →    Expandir/recolher nó no JSON Tree (e=tudo, c=recolher)',
       '  /  e  n / N      Buscar texto no arquivo e saltar ocorrências',
       '  y                Copiar caminho completo do arquivo aberto',
