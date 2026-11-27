@@ -84,10 +84,11 @@ test('parseCommitGraph preserva conectores, marca commits parados e sanitiza ANS
 
 test('parseBranchesOutput ignora origin/HEAD e identifica branch ativa', () => {
   const stdout = [
-    `*\x1ffeat/git-panel\x1forigin/feat/git-panel\x1f[ahead 2]\x1f5 minutes ago\x1ffeat: add git panel`,
-    ` \x1fmain\x1forigin/main\x1f\x1f1 day ago\x1frelease v0.5.0`,
+    `*\x1ffeat/git-panel\x1forigin/feat/git-panel\x1f[ahead 2]\x1f5 minutes ago\x1ffeat: add git panel\x1frefs/heads/feat/git-panel`,
+    ` \x1fmain\x1forigin/main\x1f\x1f1 day ago\x1frelease v0.5.0\x1frefs/heads/main`,
+    ` \x1forigin\x1f\x1f\x1f1 day ago\x1frelease v0.5.0\x1frefs/remotes/origin/HEAD`,
     ` \x1forigin/HEAD\x1f\x1f\x1f1 day ago\x1frelease v0.5.0`,
-    ` \x1forigin/dev\x1f\x1f\x1f2 days ago\x1fdev sync`,
+    ` \x1forigin/dev\x1f\x1f\x1f2 days ago\x1fdev sync\x1frefs/remotes/origin/dev`,
   ].join('\n');
 
   const branches = parseBranchesOutput(stdout);
@@ -225,6 +226,11 @@ test('integração Git local: status, stage/unstage, commit parado, árvore, dif
     assert.equal(branchRes.ok, true);
     const snap2 = await loadGitPanelSnapshot(tmpDir);
     assert.equal(snap2.status.branch, 'feat/nova-branch');
+    assert.equal(snap2.branches.length >= 2, true);
+    assert.equal(
+      snap2.branches.some((b) => b.name === 'feat/nova-branch' && b.isCurrent),
+      true
+    );
   } finally {
     await fs.rm(tmpDir, { recursive: true, force: true });
   }

@@ -423,13 +423,16 @@ export function parseBranchesOutput(stdout: string): GitBranchInfo[] {
     const parts = line.split('\x1f');
     const headMark = (parts[0] ?? '').trim();
     const name = stripUnsafeAnsi((parts[1] ?? '').trim());
-    if (!name || name.endsWith('/HEAD')) continue;
+    const fullRef = stripUnsafeAnsi((parts[6] ?? '').trim());
+    if (!name || name.endsWith('/HEAD') || fullRef.endsWith('/HEAD')) continue;
 
     const upstream = stripUnsafeAnsi((parts[2] ?? '').trim());
     const track = stripUnsafeAnsi((parts[3] ?? '').trim());
     const relativeDate = stripUnsafeAnsi((parts[4] ?? '').trim());
     const subject = stripUnsafeAnsi((parts[5] ?? '').trim());
-    const isRemote = name.startsWith('origin/') || name.startsWith('upstream/') || name.includes('remotes/');
+    const isRemote = fullRef
+      ? fullRef.startsWith('refs/remotes/')
+      : name.startsWith('origin/') || name.startsWith('upstream/') || name.includes('remotes/');
 
     branches.push({
       name,
@@ -529,7 +532,7 @@ export async function loadGitPanelSnapshot(cwd: string): Promise<GitPanelSnapsho
         'branch',
         '-a',
         '--sort=-committerdate',
-        '--format=%(HEAD)%x1f%(refname:short)%x1f%(upstream:short)%x1f%(upstream:track)%x1f%(committerdate:relative)%x1f%(subject)',
+        '--format=%(HEAD)%1f%(refname:short)%1f%(upstream:short)%1f%(upstream:track)%1f%(committerdate:relative)%1f%(subject)%1f%(refname)',
       ],
       repoRoot
     ),
