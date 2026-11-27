@@ -19,7 +19,7 @@ import { fg, getTheme, type ThemeName, type ThemePalette } from './themes/palett
 import { BOLD, DIM, RESET } from './tui/ansi.js';
 import { ExploreioApp } from './tui/app.js';
 
-export const VERSION = '0.1.0';
+export const VERSION = '0.5.0';
 
 export function loadSavedDefaultTheme(): ThemeName {
   try {
@@ -39,6 +39,7 @@ export interface ParsedCliArgs {
   readonly viewMode?: ViewMode;
   readonly width?: number;
   readonly showHidden: boolean;
+  readonly singleFile: boolean;
   readonly showHelp: boolean;
   readonly showVersion: boolean;
 }
@@ -53,6 +54,7 @@ export function parseCliArgs(argv: readonly string[], defaultTheme: ThemeName = 
   let viewMode: ViewMode | undefined;
   let width: number | undefined;
   let showHidden = false;
+  let singleFile = false;
   let showHelp = false;
   let showVersion = false;
 
@@ -66,6 +68,8 @@ export function parseCliArgs(argv: readonly string[], defaultTheme: ThemeName = 
       printMode = true;
     } else if (arg === '-a' || arg === '--all') {
       showHidden = true;
+    } else if (arg === '--single') {
+      singleFile = true;
     } else if ((arg === '-t' || arg === '--theme') && argv[i + 1]) {
       theme = getTheme(argv[++i]).name;
     } else if ((arg === '-m' || arg === '--mode') && argv[i + 1]) {
@@ -80,7 +84,7 @@ export function parseCliArgs(argv: readonly string[], defaultTheme: ThemeName = 
     }
   }
 
-  return { target, printMode, theme, viewMode, width, showHidden, showHelp, showVersion };
+  return { target, printMode, theme, viewMode, width, showHidden, singleFile, showHelp, showVersion };
 }
 
 export function getHelpText(theme: ThemePalette = getTheme(loadSavedDefaultTheme())): string {
@@ -103,7 +107,8 @@ export function getHelpText(theme: ThemePalette = getTheme(loadSavedDefaultTheme
     `  ${cmd('exp ...')}                           ${dim('Atalho curto idêntico a exploreio')}`,
     '',
     h('FORMATOS COM RENDERIZAÇÃO RICA (Tab alterna o modo no Leitor)'),
-    `  ${cmd('Markdown (.md/.mdx)')}  ${txt('Títulos, tabelas Unicode, checklists, callouts e código')} ${dim('[rendered | raw]')}`,
+    `  ${cmd('Markdown (.md/.mdx)')}  ${txt('Títulos, tabelas, callouts, código e Mermaid inline')}     ${dim('[rendered | raw]')}`,
+    `  ${cmd('Mermaid (.mmd)')}       ${txt('Diagramas 2D via @leosdc/termaid (flow/seq/state/er/timeline/git)')} ${dim('[rendered | raw]')}`,
     `  ${cmd('JSON (.json/.jsonc)')}  ${txt('Árvore interativa recolhível/expansível + diagnóstico')}   ${dim('[tree | pretty]')}`,
     `  ${cmd('HTML (.html/.htm)')}    ${txt('Modo Reader limpo (sem scripts/styles) + fonte colorido')} ${dim('[reader | source]')}`,
     `  ${cmd('Código-Fonte')}         ${txt('Syntax highlighting (TS/JS/Py/Rust/Go/CSS/SQL/YAML/Sh)')}  ${dim('[code]')}`,
@@ -115,12 +120,14 @@ export function getHelpText(theme: ThemePalette = getTheme(loadSavedDefaultTheme
     `  ${cmd('-t, --theme <tema>')}                ${txt('midnight (escuro) | parchment (claro) | nord (ártico)')}`,
     `  ${cmd('-w, --width <colunas>')}             ${txt('Largura máxima de renderização no modo --print')}`,
     `  ${cmd('-a, --all')}                         ${txt('Exibe arquivos ocultos (iniciados por ".") ao abrir')}`,
+    `  ${cmd('--single')}                          ${txt('Abre o arquivo direto no Leitor e fecha ao pressionar Esc/q')}`,
     `  ${cmd('-v, --version')}                     ${txt('Exibe a versão instalada')}`,
     `  ${cmd('-h, --help')}                        ${txt('Exibe este guia de uso')}`,
     '',
     h('ATALHOS ESSENCIAIS NA TUI'),
     `  ${cmd('↑/↓ ou j/k')}  Mover (roda do mouse)      ${cmd('Enter / →')}  Entrar na pasta ou ABRIR no Leitor`,
     `  ${cmd('← / Bksp')}    Subir diretório            ${cmd('Tab')}        Alternar modo (Rendered↔Raw / Tree↔Pretty)`,
+    `  ${cmd('o / F')}       Abrir em shell Fullscreen  ${cmd('e')}          Abrir no Editor Vim nativo`,
     `  ${cmd('/ ou f')}      Filtrar / Buscar (n/N)     ${cmd('t')}          Trocar tema (Midnight · Parchment · Nord)`,
     `  ${cmd('e / c')}       Expandir/Recolher JSON     ${cmd('a / r / d')}  Criar / Renomear / Excluir arquivo`,
     `  ${cmd('y')}           Copiar caminho (path)      ${cmd('.')}          Alternar arquivos ocultos`,
@@ -173,6 +180,8 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
   const app = new ExploreioApp({
     startDir: isFile ? path.dirname(resolvedTarget) : resolvedTarget,
     initialFile: isFile ? resolvedTarget : undefined,
+    initialMode: args.viewMode,
+    singleFile: isFile && args.singleFile,
     themeName: args.theme,
     showHidden: args.showHidden,
   });

@@ -9,6 +9,38 @@ import path from 'node:path';
 import { VimEngine } from '../editor/vimEngine.js';
 import { buildEditorFrame, type EditorViewport } from '../editor/vimView.js';
 import {
+  getGitSummaryBadge,
+  gitCheckoutBranch,
+  gitCommit,
+  gitCreateBranch,
+  gitDiscardFile,
+  gitFetch,
+  gitPull,
+  gitPush,
+  gitStageAll,
+  gitStageFile,
+  gitStashPop,
+  gitStashPush,
+  gitUnstageAll,
+  gitUnstageFile,
+  loadCommitDetails,
+  loadFileDiff,
+  loadGitHubData,
+  loadGitPanelSnapshot,
+  type GitHeaderSummary,
+  type GitHubPanelData,
+  type GitPanelSnapshot,
+} from '../git/gitService.js';
+import {
+  buildGitHubListItems,
+  buildGitPanelFrame,
+  buildQuickActions,
+  buildStatusListItems,
+  formatGitHeaderBadge,
+  type GitPanelTab,
+  type GitQuickActionId,
+} from '../git/gitView.js';
+import {
   createFileOrDir,
   deleteEntry,
   formatBytes,
@@ -29,15 +61,27 @@ import {
 import { bg, fg, getTheme, nextTheme, type ThemeName, type ThemePalette } from '../themes/palette.js';
 import { BOLD, DIM, ITALIC, RESET, fitAnsi, highlightSearch, stripUnsafeAnsi, truncateAnsi, visibleLength } from './ansi.js';
 import { copyTextToClipboard } from './clipboard.js';
+import { openInFullscreenShell } from './fullscreenLauncher.js';
 import { parseInputChunk, type KeyEvent } from './input.js';
 import { ScreenBuffer } from './screen.js';
 
-type AppView = 'browser' | 'reader' | 'editor';
-type PromptKind = null | 'filter' | 'search' | 'create' | 'rename' | 'delete';
+type AppView = 'browser' | 'reader' | 'editor' | 'git';
+type PromptKind =
+  | null
+  | 'filter'
+  | 'search'
+  | 'create'
+  | 'rename'
+  | 'delete'
+  | 'git-commit'
+  | 'git-branch-create'
+  | 'git-confirm';
 
 export interface ExploreioAppOptions {
   readonly startDir: string;
   readonly initialFile?: string;
+  readonly initialMode?: ViewMode;
+  readonly singleFile?: boolean;
   readonly themeName?: ThemeName;
   readonly showHidden?: boolean;
 }
@@ -69,6 +113,8 @@ function getFileBadge(entry: FileEntry, theme: ThemePalette): string {
 
 export class ExploreioApp {
   private readonly screen = new ScreenBuffer();
+  private readonly initialMode?: ViewMode;
+  private readonly singleFile: boolean;
   private themeName: ThemeName;
   private view: AppView = 'browser';
   private showHidden: boolean;
@@ -104,6 +150,29 @@ export class ExploreioApp {
   private editorStatusIsError = false;
   private editorSavedAny = false;
 
+  // Painel Git & GitHub + Badge no navegador (SPEC-005)
+  private gitSummary: GitHeaderSummary | null = null;
+  private gitSummarySeq = 0;
+  private gitSnapshot: GitPanelSnapshot | null = null;
+  private gitHubData: GitHubPanelData = {
+    available: false,
+    loading: false,
+    repoSlug: null,
+    pullRequests: [],
+    issues: [],
+    workflowRuns: [],
+  };
+  private gitTab: GitPanelTab = 'status';
+  private gitSelectedIndex = 0;
+  private gitListScroll = 0;
+  private gitDetailTitle = '';
+  private gitDetailLines: string[] = [];
+  private gitDetailScroll = 0;
+  private gitShowQuickPalette = false;
+  private gitQuickPaletteIndex = 0;
+  private gitBusyMessage = '';
+  private gitPendingConfirm: { label: string; run: () => Promise<void> } | null = null;
+
   // Prompt modal inline (barra inferior)
   private promptKind: PromptKind = null;
   private promptInput = '';
@@ -112,6 +181,8 @@ export class ExploreioApp {
 
   constructor(options: ExploreioAppOptions) {
     this.currentDir = path.resolve(options.startDir);
+    this.initialMode = options.initialMode;
+    this.singleFile = Boolean(options.singleFile);
     this.themeName = options.themeName ?? 'midnight';
     this.showHidden = Boolean(options.showHidden);
     if (options.initialFile) {
@@ -149,7 +220,7 @@ export class ExploreioApp {
         const resolved = path.resolve(initialFile);
         const idx = this.currentEntries.findIndex((e) => e.fullPath === resolved);
         if (idx >= 0) this.selectedIndex = idx;
-        await this.openFileInReader(resolved);
+        await this.openFileInReader(resolved, this.initialMode);
       }
       this.draw();
     } catch (err) {
@@ -204,6 +275,8 @@ export class ExploreioApp {
 
       if (this.view === 'editor') {
         await this.handleEditorKey(ev);
+      } else if (this.view === 'git') {
+        await this.handleGitKey(ev);
       } else if (this.view === 'reader') {
         await this.handleReaderKey(ev);
       } else {
@@ -274,6 +347,18 @@ export class ExploreioApp {
           }
         } else {
           this.toastMessage = 'Exclusão cancelada.';
+        }
+      } else if (kind === 'git-commit') {
+        await this.executeGitCommitPrompt(value);
+      } else if (kind === 'git-branch-create') {
+        await this.executeGitCreateBranchPrompt(value);
+      } else if (kind === 'git-confirm') {
+        const pending = this.gitPendingConfirm;
+        this.gitPendingConfirm = null;
+        if (pending && (value.trim().toLowerCase() === 'y' || value.trim().toLowerCase() === 's')) {
+          await pending.run();
+        } else {
+          this.toastMessage = 'Operação Git cancelada.';
         }
       }
       this.draw();
@@ -355,6 +440,20 @@ export class ExploreioApp {
       await this.copySelectedPath();
       return;
     }
+    if (ev.char === 'o' || ev.char === 'F') {
+      const entry = this.currentEntries[this.selectedIndex];
+      if (entry && !entry.isDirectory) {
+        await this.openInFullscreenTerminal(entry.fullPath);
+      } else {
+        this.toastMessage = 'Selecione um arquivo para abrir em terminal tela cheia (o).';
+        this.draw();
+      }
+      return;
+    }
+    if (ev.name === 'tab' || (ev.ctrl && ev.name === 'g')) {
+      await this.openGitPanel();
+      return;
+    }
     if (ev.char === 'e') {
       const entry = this.currentEntries[this.selectedIndex];
       if (entry && !entry.isDirectory) {
@@ -421,6 +520,10 @@ export class ExploreioApp {
     const isJsonTree = this.activeDoc?.kind === 'json' && this.activeDoc.activeMode === 'tree';
 
     if (ev.name === 'escape' || ev.char === 'q' || ev.name === 'backspace') {
+      if (this.singleFile) {
+        this.shutdown();
+        process.exit(0);
+      }
       this.view = 'browser';
       this.readerSearchQuery = '';
       this.readerSearchMatches = [];
@@ -442,6 +545,14 @@ export class ExploreioApp {
     }
     if (ev.char === 'y') {
       await this.copySelectedPath();
+      return;
+    }
+    if ((ev.char === 'o' || ev.char === 'F') && this.activeFilePreview) {
+      await this.openInFullscreenTerminal(this.activeFilePreview.filePath, this.activeDoc?.activeMode);
+      return;
+    }
+    if (ev.ctrl && ev.name === 'g') {
+      await this.openGitPanel();
       return;
     }
     if ((ev.char === 'E' || (ev.char === 'e' && !isJsonTree)) && this.activeFilePreview) {
@@ -602,6 +713,7 @@ export class ExploreioApp {
     }
 
     await this.refreshSelectedPreview();
+    this.refreshGitHeaderSummary();
   }
 
   private async refreshSelectedPreview(): Promise<void> {
@@ -633,9 +745,22 @@ export class ExploreioApp {
     this.previewLines = doc.lines;
   }
 
-  private async openFileInReader(filePath: string): Promise<void> {
+  private async openInFullscreenTerminal(filePath: string, viewMode?: ViewMode): Promise<void> {
+    const result = await openInFullscreenShell(filePath, {
+      themeName: this.themeName,
+      viewMode,
+    });
+    if (result.ok) {
+      this.toastMessage = `Aberto em terminal tela cheia: ${stripUnsafeAnsi(path.basename(filePath))}`;
+    } else {
+      this.toastMessage = `Falha ao abrir tela cheia: ${stripUnsafeAnsi(result.error ?? 'terminal indisponível')}`;
+    }
+    this.draw();
+  }
+
+  private async openFileInReader(filePath: string, initialMode?: ViewMode): Promise<void> {
     this.activeFilePreview = await safeReadFilePreview(filePath);
-    this.preferredMode = undefined;
+    this.preferredMode = initialMode;
     this.collapsedJsonPaths.clear();
     this.readerScroll = 0;
     this.readerCursor = 0;
@@ -789,9 +914,29 @@ export class ExploreioApp {
             statusMessage: this.editorStatusMessage,
             statusIsError: this.editorStatusIsError,
           })
-        : this.view === 'reader'
-          ? this.buildReaderFrame(width, height, theme)
-          : this.buildBrowserFrame(width, height, theme);
+        : this.view === 'git' && this.gitSnapshot
+          ? buildGitPanelFrame(
+              {
+                snapshot: this.gitSnapshot,
+                github: this.gitHubData,
+                activeTab: this.gitTab,
+                selectedIndex: this.gitSelectedIndex,
+                listScroll: this.gitListScroll,
+                detailTitle: this.gitDetailTitle,
+                detailLines: this.gitDetailLines,
+                detailScroll: this.gitDetailScroll,
+                showQuickPalette: this.gitShowQuickPalette,
+                quickPaletteIndex: this.gitQuickPaletteIndex,
+                busyMessage: this.gitBusyMessage,
+                footerLine: this.buildFooterBar(width, theme),
+              },
+              width,
+              height,
+              theme
+            )
+          : this.view === 'reader'
+            ? this.buildReaderFrame(width, height, theme)
+            : this.buildBrowserFrame(width, height, theme);
 
     if (this.showHelp) {
       this.overlayHelpModal(lines, width, height, theme);
@@ -815,11 +960,12 @@ export class ExploreioApp {
 
     // Cabeçalho superior
     const brand = `${bg(theme.headerBg)}${fg(theme.accent)}${BOLD} ◈ EXPLOREIO ${RESET}`;
+    const gitBadge = formatGitHeaderBadge(this.gitSummary, theme);
     const themePill = `${bg(theme.headerBg)}${fg(theme.muted)} [${theme.label}]${this.showHidden ? ' [.*]' : ''} ${RESET}`;
-    const pathMax = Math.max(10, width - visibleLength(brand) - visibleLength(themePill) - 2);
+    const pathMax = Math.max(10, width - visibleLength(brand) - visibleLength(gitBadge) - visibleLength(themePill) - 2);
     const headerPath = `${bg(theme.headerBg)}${fg(theme.headerFg)}${BOLD} ${truncateAnsi(stripUnsafeAnsi(this.currentDir), pathMax)} ${RESET}`;
-    const headerFill = `${bg(theme.headerBg)}${' '.repeat(Math.max(0, width - visibleLength(brand) - visibleLength(headerPath) - visibleLength(themePill)))}${RESET}`;
-    const headerLine = `${brand}${headerPath}${headerFill}${themePill}`;
+    const headerFill = `${bg(theme.headerBg)}${' '.repeat(Math.max(0, width - visibleLength(brand) - visibleLength(headerPath) - visibleLength(gitBadge) - visibleLength(themePill)))}${RESET}`;
+    const headerLine = `${brand}${headerPath}${headerFill}${gitBadge}${themePill}`;
 
     // Mantém seleção centralizada/visível no painel atual
     if (this.selectedIndex < this.listScroll) this.listScroll = this.selectedIndex;
@@ -931,6 +1077,9 @@ export class ExploreioApp {
         create: 'Criar arquivo ou pasta/ : ',
         rename: 'Renomear para: ',
         delete: `Excluir "${this.currentEntries[this.selectedIndex]?.name ?? ''}"? (y/N): `,
+        'git-commit': 'git commit -m : ',
+        'git-branch-create': 'Nova branch (git checkout -b): ',
+        'git-confirm': `${this.gitPendingConfirm?.label ?? 'Confirmar operação Git'}? (y/N): `,
       };
       const text = ` ${labels[this.promptKind]}${this.promptInput}█`;
       return `${bg(theme.selectionBg)}${fg(theme.selectionFg)}${BOLD}${fitAnsi(text, width)}${RESET}`;
@@ -942,15 +1091,28 @@ export class ExploreioApp {
 
     if (this.view === 'reader') {
       const isJsonTree = this.activeDoc?.kind === 'json' && this.activeDoc.activeMode === 'tree';
+      const exitLabel = this.singleFile ? 'Esc/q Fechar' : 'Esc Voltar';
       const hint = isJsonTree
-        ? ' Esc Voltar · ↑↓ Navegar · Enter/←→ Nó · e/c Tudo · E Vim · Tab Pretty · y Path · / Buscar · t Tema'
-        : ' Esc Voltar · e Editar (Vim) · ↑↓/PgUp/PgDn Rolar · Tab Modo · y Path · / Buscar · t Tema · ? Ajuda';
+        ? ` ${exitLabel} · ↑↓ Navegar · Enter/←→ Nó · e/c Tudo · o Tela cheia · E Vim · Tab Pretty · y Path · / Buscar · t Tema`
+        : ` ${exitLabel} · o Tela cheia · e Vim · ↑↓/PgUp/PgDn Rolar · Tab Modo · y Path · / Buscar · t Tema · ? Ajuda`;
+      return `${bg(theme.statusBg)}${fg(theme.statusFg)}${fitAnsi(hint, width)}${RESET}`;
+    }
+
+    if (this.view === 'git') {
+      const hint =
+        this.gitTab === 'status'
+          ? ' Esc Voltar · 1-4/Tab Abas · ↑↓ Selecionar · J/K Rolar diff · s/Space Stage · S All · c Commit · p Pull · P Push · b Branch · ? Ações'
+          : this.gitTab === 'graph'
+            ? ' Esc Voltar · 1-4/Tab Abas · ↑↓ Commits · J/K Rolar show · y Copiar hash · p Pull · P Push · f Fetch · r Atualizar · ? Ações'
+            : this.gitTab === 'branches'
+              ? ' Esc Voltar · 1-4/Tab Abas · ↑↓ Branches · Enter Checkout · b +Branch · p Pull · P Push · f Fetch · ? Ações'
+              : ' Esc Voltar · 1-4/Tab Abas · ↑↓ Itens · y/Enter Copiar URL · r Atualizar · t Tema · ? Ações';
       return `${bg(theme.statusBg)}${fg(theme.statusFg)}${fitAnsi(hint, width)}${RESET}`;
     }
 
     const pos = this.currentEntries.length > 0 ? `${this.selectedIndex + 1}/${this.currentEntries.length}` : '0/0';
     const filterTag = this.filterQuery ? ` [filtro: ${this.filterQuery}]` : '';
-    const hint = ` ${pos}${filterTag} · Enter Ler · e Vim · ←→ Navegar · y Path · / Filtrar · . Ocultos · t Tema · a/r/d · ? Ajuda · q Sair`;
+    const hint = ` ${pos}${filterTag} · Enter Ler · Tab/Ctrl+G Git · o Tela cheia · e Vim · ←→ Navegar · y Path · / Filtrar · t Tema · ? Ajuda · q Sair`;
     return `${bg(theme.statusBg)}${fg(theme.statusFg)}${fitAnsi(hint, width)}${RESET}`;
   }
 
@@ -965,9 +1127,16 @@ export class ExploreioApp {
       '  .                Mostrar/ocultar arquivos ocultos',
       '  y                Copiar caminho selecionado (arquivo ou pasta)',
       '  a / r / d        Criar / Renomear / Excluir (com confirmação)',
+      '  Tab ou Ctrl+G    Abrir PAINEL GIT / GITHUB (status, árvore, branches, PRs)',
       '',
-      '  MODO LEITOR FULLSCREEN (Markdown · JSON · HTML · Código)',
+      '  PAINEL GIT / GITHUB (Tab ou Ctrl+G)',
+      '  1-4 ou Tab       Alternar abas (Status/Parados · Árvore · Branches · GitHub)',
+      '  s / S / c        Stage/Unstage · Stage All · Commit com mensagem',
+      '  p / P / f / b    Pull · Push · Fetch · Criar nova branch (? abre paleta)',
+      '',
+      '  MODO LEITOR FULLSCREEN (Markdown · Mermaid · JSON · HTML · Código)',
       '  Tab              Alternar modo (Rendered↔Raw | Tree↔Pretty | Reader↔Source)',
+      '  o ou F           Abrir arquivo em novo terminal TELA CHEIA (ideal p/ split)',
       '  Enter / ← / →    Expandir/recolher nó no JSON Tree (e=tudo, c=recolher)',
       '  /  e  n / N      Buscar texto no arquivo e saltar ocorrências',
       '  y                Copiar caminho completo do arquivo aberto',
@@ -1002,5 +1171,655 @@ export class ExploreioApp {
         lines[targetRow] = mLine;
       }
     });
+  }
+
+  // ==================== PAINEL GIT & GITHUB (SPEC-005) ====================
+
+  private refreshGitHeaderSummary(): void {
+    const seq = ++this.gitSummarySeq;
+    const targetDir = this.currentDir;
+    void getGitSummaryBadge(targetDir).then((summary) => {
+      if (seq !== this.gitSummarySeq) return;
+      this.gitSummary = summary;
+      if (this.running && this.view === 'browser') {
+        this.draw();
+      }
+    });
+  }
+
+  private async openGitPanel(): Promise<void> {
+    this.view = 'git';
+    this.gitShowQuickPalette = false;
+    this.gitQuickPaletteIndex = 0;
+    this.gitTab = 'status';
+    this.gitSelectedIndex = 0;
+    this.gitListScroll = 0;
+    this.gitDetailScroll = 0;
+    this.gitBusyMessage = 'Carregando repositório Git...';
+    this.toastMessage = '';
+    await this.refreshGitPanelData(true);
+  }
+
+  private async refreshGitPanelData(reloadGitHub = false): Promise<void> {
+    this.gitBusyMessage = 'Atualizando Git...';
+    if (this.gitSnapshot) this.draw();
+
+    const snap = await loadGitPanelSnapshot(this.currentDir);
+    this.gitSnapshot = snap;
+    this.gitBusyMessage = '';
+
+    if (snap.isGitRepo) {
+      this.gitSummary = {
+        repoRoot: snap.repoRoot,
+        branch: snap.status.branch,
+        upstream: snap.status.upstream,
+        ahead: snap.status.ahead,
+        behind: snap.status.behind,
+        stagedCount: snap.status.stagedCount,
+        unstagedCount: snap.status.unstagedCount,
+        untrackedCount: snap.status.untrackedCount,
+        dirtyCount:
+          snap.status.stagedCount +
+          snap.status.unstagedCount +
+          snap.status.untrackedCount +
+          snap.status.conflictedCount,
+      };
+    }
+
+    this.clampGitSelection(1);
+    await this.refreshGitDetail();
+    this.draw();
+
+    if (reloadGitHub && snap.isGitRepo) {
+      this.gitHubData = {
+        available: false,
+        loading: true,
+        repoSlug: snap.githubRepo,
+        pullRequests: [],
+        issues: [],
+        workflowRuns: [],
+      };
+      if (this.gitTab === 'github') this.draw();
+      void loadGitHubData(snap.repoRoot, snap.githubRepo).then((ghData) => {
+        this.gitHubData = ghData;
+        if (this.running && this.view === 'git') {
+          if (this.gitTab === 'github') {
+            this.clampGitSelection(1);
+            void this.refreshGitDetail().then(() => this.draw());
+          } else {
+            this.draw();
+          }
+        }
+      });
+    }
+  }
+
+  private getGitTabListLength(): number {
+    if (!this.gitSnapshot || !this.gitSnapshot.isGitRepo) return 0;
+    if (this.gitTab === 'status') return buildStatusListItems(this.gitSnapshot).length;
+    if (this.gitTab === 'graph') return this.gitSnapshot.commitGraph.length;
+    if (this.gitTab === 'branches') return this.gitSnapshot.branches.length;
+    return buildGitHubListItems(this.gitHubData).length;
+  }
+
+  private isGitRowSelectable(index: number): boolean {
+    if (!this.gitSnapshot || !this.gitSnapshot.isGitRepo) return false;
+    if (this.gitTab === 'status') {
+      const item = buildStatusListItems(this.gitSnapshot)[index];
+      return Boolean(item && item.kind !== 'header');
+    }
+    if (this.gitTab === 'graph') {
+      const row = this.gitSnapshot.commitGraph[index];
+      return Boolean(row && !row.isConnectorOnly);
+    }
+    if (this.gitTab === 'branches') {
+      return Boolean(this.gitSnapshot.branches[index]);
+    }
+    const ghItem = buildGitHubListItems(this.gitHubData)[index];
+    return Boolean(ghItem && ghItem.kind !== 'header');
+  }
+
+  private clampGitSelection(direction: 1 | -1 = 1): void {
+    const len = this.getGitTabListLength();
+    if (len === 0) {
+      this.gitSelectedIndex = 0;
+      this.gitListScroll = 0;
+      return;
+    }
+
+    let idx = Math.max(0, Math.min(len - 1, this.gitSelectedIndex));
+    if (!this.isGitRowSelectable(idx)) {
+      let found = -1;
+      for (let i = idx; i >= 0 && i < len; i += direction) {
+        if (this.isGitRowSelectable(i)) {
+          found = i;
+          break;
+        }
+      }
+      if (found === -1) {
+        for (let i = idx; i >= 0 && i < len; i -= direction) {
+          if (this.isGitRowSelectable(i)) {
+            found = i;
+            break;
+          }
+        }
+      }
+      idx = found >= 0 ? found : 0;
+    }
+
+    this.gitSelectedIndex = idx;
+    const { height } = this.screen.getSize();
+    const bodyHeight = Math.max(4, height - 3);
+    if (this.gitSelectedIndex < this.gitListScroll) {
+      this.gitListScroll = this.gitSelectedIndex;
+    } else if (this.gitSelectedIndex >= this.gitListScroll + bodyHeight) {
+      this.gitListScroll = this.gitSelectedIndex - bodyHeight + 1;
+    }
+  }
+
+  private moveGitSelection(delta: number): void {
+    const len = this.getGitTabListLength();
+    if (len === 0) return;
+    const dir: 1 | -1 = delta >= 0 ? 1 : -1;
+    let next = this.gitSelectedIndex + delta;
+    while (next >= 0 && next < len && !this.isGitRowSelectable(next)) {
+      next += dir;
+    }
+    if (next >= 0 && next < len && this.isGitRowSelectable(next)) {
+      this.gitSelectedIndex = next;
+    }
+    this.clampGitSelection(dir);
+  }
+
+  private async refreshGitDetail(): Promise<void> {
+    this.gitDetailScroll = 0;
+    const snap = this.gitSnapshot;
+    if (!snap || !snap.isGitRepo) {
+      this.gitDetailTitle = 'Git';
+      this.gitDetailLines = [];
+      return;
+    }
+
+    if (this.gitTab === 'status') {
+      const item = buildStatusListItems(snap)[this.gitSelectedIndex];
+      if (!item || item.kind === 'header') {
+        this.gitDetailTitle = `Resumo · ${snap.githubRepo ?? snap.repoName}`;
+        this.gitDetailLines = [
+          `Branch: ${snap.status.branch}`,
+          `Upstream: ${snap.status.upstream ?? '(nenhum — use P para publicar)'}`,
+          `Commits parados (ahead): ${snap.unpushedCommits.length}`,
+          `Commits atrás (behind): ${snap.status.behind}`,
+          `Staged: ${snap.status.stagedCount} | Modificados: ${snap.status.unstagedCount} | Untracked: ${snap.status.untrackedCount}`,
+          `Stashes: ${snap.stashCount}`,
+          snap.remoteUrl ? `Remote: ${snap.remoteUrl}` : 'Remote: (nenhum)',
+          '',
+          'Dica: pressione `?` para abrir a Paleta de Comandos Rápidos.',
+        ];
+        return;
+      }
+      if (item.kind === 'unpushed') {
+        this.gitDetailTitle = `Commit Parado ↑ ${item.commit.shortHash}`;
+        this.gitDetailLines = await loadCommitDetails(snap.repoRoot, item.commit.fullHash || item.commit.shortHash);
+        return;
+      }
+      const sectionLabel =
+        item.entry.section === 'staged'
+          ? 'STAGED'
+          : item.entry.section === 'untracked'
+            ? 'NOVO'
+            : 'DIFF';
+      this.gitDetailTitle = `${sectionLabel} · ${item.entry.path}`;
+      this.gitDetailLines = await loadFileDiff(snap.repoRoot, item.entry);
+      return;
+    }
+
+    if (this.gitTab === 'graph') {
+      const row = snap.commitGraph[this.gitSelectedIndex];
+      if (!row || row.isConnectorOnly) {
+        this.gitDetailTitle = 'Árvore de Commits';
+        this.gitDetailLines = ['Selecione um commit para inspecionar o diff completo.'];
+        return;
+      }
+      this.gitDetailTitle = `Commit ${row.shortHash}${row.isUnpushed ? ' (↑ parado)' : ''}`;
+      this.gitDetailLines = await loadCommitDetails(snap.repoRoot, row.fullHash || row.shortHash);
+      return;
+    }
+
+    if (this.gitTab === 'branches') {
+      const br = snap.branches[this.gitSelectedIndex];
+      if (!br) {
+        this.gitDetailTitle = 'Branches';
+        this.gitDetailLines = [];
+        return;
+      }
+      this.gitDetailTitle = `Branch · ${br.name}`;
+      this.gitDetailLines = [
+        `Branch: ${br.name}${br.isCurrent ? ' (ATIVA)' : ''}`,
+        `Tipo: ${br.isRemote ? 'Remota' : 'Local'}`,
+        `Upstream: ${br.upstream || '(não configurado)'}`,
+        `Status: ${br.track || 'sincronizada'}`,
+        `Última atividade: ${br.relativeDate}`,
+        `Último commit: ${br.subject}`,
+        '',
+        'Atalhos nesta aba:',
+        '  Enter  -> git checkout <branch> (com confirmação)',
+        '  b      -> git checkout -b <nova-branch>',
+        '  p / P  -> git pull / git push',
+        '  ?      -> Paleta de comandos rápidos',
+      ];
+      return;
+    }
+
+    const ghItem = buildGitHubListItems(this.gitHubData)[this.gitSelectedIndex];
+    if (!ghItem || ghItem.kind === 'header') {
+      this.gitDetailTitle = `GitHub · ${this.gitHubData.repoSlug ?? ''}`;
+      this.gitDetailLines = this.gitHubData.available
+        ? [
+            `Repositório: ${this.gitHubData.repoSlug}`,
+            `Pull Requests abertos: ${this.gitHubData.pullRequests.length}`,
+            `Issues abertas: ${this.gitHubData.issues.length}`,
+            `Workflow Runs recentes: ${this.gitHubData.workflowRuns.length}`,
+          ]
+        : [this.gitHubData.reason ?? 'GitHub indisponível.'];
+      return;
+    }
+    if (ghItem.kind === 'pr') {
+      const pr = ghItem.pr;
+      this.gitDetailTitle = `PR #${pr.number}`;
+      this.gitDetailLines = [
+        `#${pr.number} — ${pr.title}`,
+        `Autor: @${pr.author}`,
+        `Branches: ${pr.headRefName} → ${pr.baseRefName}`,
+        `Status: ${pr.isDraft ? 'Draft' : 'Open'}${pr.reviewDecision ? ` · Review: ${pr.reviewDecision}` : ''}`,
+        `Atualizado: ${pr.updatedAt}`,
+        `URL: ${pr.url}`,
+        '',
+        'Pressione Enter ou y para copiar a URL do PR.',
+      ];
+      return;
+    }
+    if (ghItem.kind === 'issue') {
+      const issue = ghItem.issue;
+      this.gitDetailTitle = `Issue #${issue.number}`;
+      this.gitDetailLines = [
+        `#${issue.number} — ${issue.title}`,
+        `Autor: @${issue.author}`,
+        `Labels: ${issue.labels.length > 0 ? issue.labels.join(', ') : '(nenhuma)'}`,
+        `Atualizado: ${issue.updatedAt}`,
+        `URL: ${issue.url}`,
+        '',
+        'Pressione Enter ou y para copiar a URL da Issue.',
+      ];
+      return;
+    }
+    const run = ghItem.run;
+    this.gitDetailTitle = `Action · ${run.workflowName}`;
+    this.gitDetailLines = [
+      `Workflow: ${run.workflowName}`,
+      `Título: ${run.title}`,
+      `Branch: ${run.branch}`,
+      `Status: ${run.status} · Conclusão: ${run.conclusion || 'em andamento'}`,
+      `Atualizado: ${run.updatedAt}`,
+      `URL: ${run.url}`,
+      '',
+      'Pressione Enter ou y para copiar a URL do Workflow Run.',
+    ];
+  }
+
+  private async handleGitKey(ev: KeyEvent): Promise<void> {
+    this.toastMessage = '';
+
+    // Paleta interativa de comandos rápidos (`?`)
+    if (this.gitShowQuickPalette && this.gitSnapshot) {
+      const actions = buildQuickActions(this.gitSnapshot);
+      if (ev.name === 'escape' || ev.char === '?' || ev.char === 'q') {
+        this.gitShowQuickPalette = false;
+        this.draw();
+        return;
+      }
+      if (ev.name === 'up' || ev.char === 'k') {
+        this.gitQuickPaletteIndex = (this.gitQuickPaletteIndex - 1 + actions.length) % actions.length;
+        this.draw();
+        return;
+      }
+      if (ev.name === 'down' || ev.char === 'j') {
+        this.gitQuickPaletteIndex = (this.gitQuickPaletteIndex + 1) % actions.length;
+        this.draw();
+        return;
+      }
+      if (ev.name === 'enter') {
+        const chosen = actions[this.gitQuickPaletteIndex];
+        this.gitShowQuickPalette = false;
+        if (chosen) await this.triggerGitQuickAction(chosen.id);
+        this.draw();
+        return;
+      }
+      if (ev.char && ev.char >= '1' && ev.char <= '9') {
+        const chosen = actions.find((a) => a.hotkey === ev.char);
+        this.gitShowQuickPalette = false;
+        if (chosen) await this.triggerGitQuickAction(chosen.id);
+        this.draw();
+        return;
+      }
+      return;
+    }
+
+    if (ev.name === 'escape' || ev.char === 'q') {
+      this.view = 'browser';
+      await this.reloadDirectory();
+      this.draw();
+      return;
+    }
+    if (ev.char === 't') {
+      this.themeName = nextTheme(this.themeName);
+      this.toastMessage = `Tema ativo: ${getTheme(this.themeName).label}`;
+      this.draw();
+      return;
+    }
+    if (ev.char === '?' && this.gitSnapshot?.isGitRepo) {
+      this.gitShowQuickPalette = true;
+      this.gitQuickPaletteIndex = 0;
+      this.draw();
+      return;
+    }
+    if (!this.gitSnapshot?.isGitRepo) {
+      this.draw();
+      return;
+    }
+
+    // Troca de abas (1..4 ou Tab / Shift+Tab)
+    const tabOrder: readonly GitPanelTab[] = ['status', 'graph', 'branches', 'github'];
+    if (ev.char === '1' || ev.char === '2' || ev.char === '3' || ev.char === '4') {
+      const nextTab = tabOrder[Number(ev.char) - 1] ?? 'status';
+      if (nextTab !== this.gitTab) {
+        this.gitTab = nextTab;
+        this.gitSelectedIndex = 0;
+        this.gitListScroll = 0;
+        this.clampGitSelection(1);
+        await this.refreshGitDetail();
+      }
+      this.draw();
+      return;
+    }
+    if (ev.name === 'tab') {
+      const idx = tabOrder.indexOf(this.gitTab);
+      const nextIdx = ev.shift ? (idx - 1 + tabOrder.length) % tabOrder.length : (idx + 1) % tabOrder.length;
+      this.gitTab = tabOrder[nextIdx] ?? 'status';
+      this.gitSelectedIndex = 0;
+      this.gitListScroll = 0;
+      this.clampGitSelection(1);
+      await this.refreshGitDetail();
+      this.draw();
+      return;
+    }
+
+    // Navegação na lista
+    if (ev.name === 'up' || ev.char === 'k' || ev.name === 'wheel_up') {
+      this.moveGitSelection(-1);
+      await this.refreshGitDetail();
+      this.draw();
+      return;
+    }
+    if (ev.name === 'down' || ev.char === 'j' || ev.name === 'wheel_down') {
+      this.moveGitSelection(1);
+      await this.refreshGitDetail();
+      this.draw();
+      return;
+    }
+    // Rolagem do painel direito (diff / detalhes)
+    if (ev.char === 'J' || ev.name === 'pagedown') {
+      this.gitDetailScroll = Math.min(Math.max(0, this.gitDetailLines.length - 5), this.gitDetailScroll + 8);
+      this.draw();
+      return;
+    }
+    if (ev.char === 'K' || ev.name === 'pageup') {
+      this.gitDetailScroll = Math.max(0, this.gitDetailScroll - 8);
+      this.draw();
+      return;
+    }
+
+    // Ações rápidas diretas
+    if (ev.char === 'r') {
+      await this.refreshGitPanelData(true);
+      this.toastMessage = 'Painel Git/GitHub atualizado.';
+      this.draw();
+      return;
+    }
+    if (ev.char === 'f') {
+      await this.triggerGitQuickAction('fetch');
+      return;
+    }
+    if (ev.char === 'p') {
+      await this.triggerGitQuickAction('pull');
+      return;
+    }
+    if (ev.char === 'P') {
+      await this.triggerGitQuickAction('push');
+      return;
+    }
+    if (ev.char === 'c') {
+      await this.triggerGitQuickAction('commit');
+      return;
+    }
+    if (ev.char === 'b') {
+      await this.triggerGitQuickAction('create-branch');
+      return;
+    }
+    if (ev.char === 'S') {
+      await this.triggerGitQuickAction('stage-all');
+      return;
+    }
+    if (ev.char === 'U') {
+      const res = await gitUnstageAll(this.gitSnapshot.repoRoot);
+      this.toastMessage = res.ok ? 'Todas as alterações removidas do stage.' : (res.errorMessage ?? 'Erro no unstage.');
+      await this.refreshGitPanelData(false);
+      return;
+    }
+
+    // Stage / Unstage individual na aba Status
+    if ((ev.char === 's' || ev.name === 'space') && this.gitTab === 'status') {
+      const item = buildStatusListItems(this.gitSnapshot)[this.gitSelectedIndex];
+      if (item?.kind === 'file') {
+        const res =
+          item.entry.section === 'staged'
+            ? await gitUnstageFile(this.gitSnapshot.repoRoot, item.entry.path)
+            : await gitStageFile(this.gitSnapshot.repoRoot, item.entry.path);
+        this.toastMessage = res.ok
+          ? `${item.entry.section === 'staged' ? 'Unstaged' : 'Staged'}: ${item.entry.path}`
+          : (res.errorMessage ?? 'Erro ao alterar stage.');
+        await this.refreshGitPanelData(false);
+      }
+      return;
+    }
+
+    // Descartar alterações de um arquivo (com confirmação obrigatória)
+    if (ev.char === 'x' && this.gitTab === 'status') {
+      const item = buildStatusListItems(this.gitSnapshot)[this.gitSelectedIndex];
+      if (item?.kind === 'file' && item.entry.section !== 'staged') {
+        const entry = item.entry;
+        const repoRoot = this.gitSnapshot.repoRoot;
+        this.askGitConfirm(`Descartar alterações de "${entry.path}"`, async () => {
+          const res = await gitDiscardFile(repoRoot, entry);
+          this.toastMessage = res.ok ? `Descartado: ${entry.path}` : (res.errorMessage ?? 'Erro ao descartar.');
+          await this.refreshGitPanelData(false);
+        });
+      }
+      return;
+    }
+
+    // Copiar hash / path / branch / URL
+    if (ev.char === 'y') {
+      await this.copyActiveGitItem();
+      return;
+    }
+
+    // Enter contextual por aba
+    if (ev.name === 'enter') {
+      if (this.gitTab === 'branches') {
+        const br = this.gitSnapshot.branches[this.gitSelectedIndex];
+        if (br && !br.isCurrent) {
+          const repoRoot = this.gitSnapshot.repoRoot;
+          this.askGitConfirm(`Trocar para branch "${br.name}" (git checkout)`, async () => {
+            const res = await gitCheckoutBranch(repoRoot, br.name);
+            this.toastMessage = res.ok ? `Branch ativa: ${br.name}` : (res.errorMessage ?? 'Erro no checkout.');
+            await this.refreshGitPanelData(false);
+          });
+        }
+        return;
+      }
+      if (this.gitTab === 'status') {
+        const item = buildStatusListItems(this.gitSnapshot)[this.gitSelectedIndex];
+        if (item?.kind === 'file') {
+          const fullPath = path.resolve(this.gitSnapshot.repoRoot, item.entry.path);
+          await this.openFileInReader(fullPath);
+          this.draw();
+        }
+        return;
+      }
+      if (this.gitTab === 'github') {
+        await this.copyActiveGitItem();
+      }
+    }
+  }
+
+  private askGitConfirm(label: string, run: () => Promise<void>): void {
+    this.gitPendingConfirm = { label, run };
+    this.promptKind = 'git-confirm';
+    this.promptInput = '';
+    this.draw();
+  }
+
+  private async triggerGitQuickAction(actionId: GitQuickActionId): Promise<void> {
+    const snap = this.gitSnapshot;
+    if (!snap || !snap.isGitRepo) return;
+    const repoRoot = snap.repoRoot;
+
+    switch (actionId) {
+      case 'pull':
+        this.askGitConfirm(`Executar git pull --ff-only em "${snap.status.branch}"`, async () => {
+          this.gitBusyMessage = 'Executando git pull...';
+          this.draw();
+          const res = await gitPull(repoRoot);
+          this.gitBusyMessage = '';
+          this.toastMessage = res.ok ? 'git pull concluído com sucesso.' : (res.errorMessage ?? 'Erro no git pull.');
+          await this.refreshGitPanelData(true);
+        });
+        return;
+      case 'push': {
+        const noUpstream = !snap.status.upstream ? snap.status.branch : undefined;
+        const cmdLabel = noUpstream ? `git push -u origin ${noUpstream}` : 'git push';
+        this.askGitConfirm(`Executar ${cmdLabel}`, async () => {
+          this.gitBusyMessage = `Executando ${cmdLabel}...`;
+          this.draw();
+          const res = await gitPush(repoRoot, noUpstream);
+          this.gitBusyMessage = '';
+          this.toastMessage = res.ok ? `${cmdLabel} concluído.` : (res.errorMessage ?? 'Erro no git push.');
+          await this.refreshGitPanelData(true);
+        });
+        return;
+      }
+      case 'fetch':
+        this.gitBusyMessage = 'Executando git fetch --all --prune...';
+        this.draw();
+        {
+          const res = await gitFetch(repoRoot);
+          this.gitBusyMessage = '';
+          this.toastMessage = res.ok ? 'git fetch concluído.' : (res.errorMessage ?? 'Erro no git fetch.');
+          await this.refreshGitPanelData(true);
+        }
+        return;
+      case 'commit':
+        if (snap.status.stagedCount === 0) {
+          this.toastMessage = 'Nenhum arquivo em stage. Use `s` ou `S` (Stage All) antes de commitar.';
+          this.draw();
+          return;
+        }
+        this.promptKind = 'git-commit';
+        this.promptInput = '';
+        this.draw();
+        return;
+      case 'create-branch':
+        this.promptKind = 'git-branch-create';
+        this.promptInput = '';
+        this.draw();
+        return;
+      case 'goto-branches':
+        this.gitTab = 'branches';
+        this.gitSelectedIndex = 0;
+        this.gitListScroll = 0;
+        this.clampGitSelection(1);
+        await this.refreshGitDetail();
+        this.draw();
+        return;
+      case 'stage-all': {
+        const res = await gitStageAll(repoRoot);
+        this.toastMessage = res.ok ? 'Todas as alterações adicionadas ao stage (git add -A).' : (res.errorMessage ?? 'Erro no stage.');
+        await this.refreshGitPanelData(false);
+        return;
+      }
+      case 'stash-push':
+        this.askGitConfirm('Guardar alterações atuais com git stash push -u', async () => {
+          const res = await gitStashPush(repoRoot);
+          this.toastMessage = res.ok ? 'Alterações salvas no stash.' : (res.errorMessage ?? 'Erro no stash.');
+          await this.refreshGitPanelData(false);
+        });
+        return;
+      case 'stash-pop':
+        this.askGitConfirm('Restaurar último stash (git stash pop)', async () => {
+          const res = await gitStashPop(repoRoot);
+          this.toastMessage = res.ok ? 'Último stash restaurado.' : (res.errorMessage ?? 'Erro no stash pop.');
+          await this.refreshGitPanelData(false);
+        });
+    }
+  }
+
+  private async executeGitCommitPrompt(message: string): Promise<void> {
+    if (!this.gitSnapshot?.isGitRepo) return;
+    const clean = message.trim();
+    if (!clean) {
+      this.toastMessage = 'Commit cancelado (mensagem vazia).';
+      return;
+    }
+    const res = await gitCommit(this.gitSnapshot.repoRoot, clean);
+    this.toastMessage = res.ok ? `Commit criado: ${clean}` : (res.errorMessage ?? 'Erro ao criar commit.');
+    await this.refreshGitPanelData(false);
+  }
+
+  private async executeGitCreateBranchPrompt(branchName: string): Promise<void> {
+    if (!this.gitSnapshot?.isGitRepo) return;
+    const clean = branchName.trim();
+    if (!clean) {
+      this.toastMessage = 'Criação de branch cancelada.';
+      return;
+    }
+    const res = await gitCreateBranch(this.gitSnapshot.repoRoot, clean);
+    this.toastMessage = res.ok ? `Branch criada e ativada: ${clean}` : (res.errorMessage ?? 'Erro ao criar branch.');
+    await this.refreshGitPanelData(false);
+  }
+
+  private async copyActiveGitItem(): Promise<void> {
+    const snap = this.gitSnapshot;
+    if (!snap || !snap.isGitRepo) return;
+    let value = '';
+    if (this.gitTab === 'status') {
+      const item = buildStatusListItems(snap)[this.gitSelectedIndex];
+      if (item?.kind === 'unpushed') value = item.commit.shortHash;
+      else if (item?.kind === 'file') value = path.resolve(snap.repoRoot, item.entry.path);
+    } else if (this.gitTab === 'graph') {
+      value = snap.commitGraph[this.gitSelectedIndex]?.shortHash ?? '';
+    } else if (this.gitTab === 'branches') {
+      value = snap.branches[this.gitSelectedIndex]?.name ?? '';
+    } else {
+      const item = buildGitHubListItems(this.gitHubData)[this.gitSelectedIndex];
+      if (item?.kind === 'pr') value = item.pr.url;
+      else if (item?.kind === 'issue') value = item.issue.url;
+      else if (item?.kind === 'run') value = item.run.url;
+    }
+    if (!value) return;
+    const res = await copyTextToClipboard(value);
+    this.toastMessage = res.ok
+      ? `Copiado: ${stripUnsafeAnsi(value)}`
+      : `Falha ao copiar: ${stripUnsafeAnsi(res.error ?? 'clipboard indisponível')}`;
+    this.draw();
   }
 }

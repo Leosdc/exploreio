@@ -7,6 +7,11 @@ e este projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR
 
 ---
 
+## [Unreleased / Dev]
+
+### Adicionado
+- **Painel Git & GitHub Nativo (`Tab` ou `Ctrl+G`):** tela dedicada em 2 painéis com 4 abas (**Status & Commits Parados**, **Árvore de Commits** com trilhos Unicode coloridos, **Branches** e **GitHub PRs/Issues/Actions via `gh` CLI**), diff/`git show` ao vivo, barra de ações rápidas, **Paleta Interativa de Comandos Rápidos (`?`)** identificando o repositório (`git pull`, `git push`, `git fetch`, `git commit`, `git branch`, `git add -A`, `git stash`) e badge discreto no cabeçalho do navegador (`⎇ branch ↑N ↓M ●K`), respeitando os 3 temas oficiais (`midnight`, `parchment`, `nord`) (#17).
+
 ## [0.4.0] - 2026-11-25
 
 ### Alterado

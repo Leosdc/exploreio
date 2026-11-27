@@ -21,6 +21,7 @@ import { renderMarkdown } from '../renderers/markdown.js';
 import { getTheme, nextTheme, THEMES } from '../themes/palette.js';
 import { highlightSearch, stripAnsi, stripUnsafeAnsi, truncateAnsi, visibleLength } from '../tui/ansi.js';
 import { copyTextToClipboard, formatOsc52Sequence, getClipboardCommands } from '../tui/clipboard.js';
+import { getFullscreenLaunchCommands, openInFullscreenShell } from '../tui/fullscreenLauncher.js';
 import { parseInputChunk } from '../tui/input.js';
 
 describe('Exploreio ANSI Safety & Text Primitives', () => {
@@ -240,5 +241,51 @@ describe('Exploreio FS, Input Decoder & CLI Args', () => {
     assert.equal(oscRes.ok, true);
     assert.equal(oscRes.method, 'osc52');
     assert.equal(capturedOsc, formatOsc52Sequence('/home/dev/projeto'));
+  });
+
+  it('monta e dispara comandos seguros para abrir arquivo em terminal fullscreen', async () => {
+    const singleParsed = parseCliArgs(['--single', 'README.md', '-t', 'nord', '-m', 'rendered']);
+    assert.equal(singleParsed.singleFile, true);
+    assert.equal(singleParsed.target, 'README.md');
+    assert.equal(singleParsed.theme, 'nord');
+    assert.equal(singleParsed.viewMode, 'rendered');
+
+    const winCmds = getFullscreenLaunchCommands('C:\\Dev\\Lyra the Wise WebApp\\readme;v2.md', {
+      platform: 'win32',
+      themeName: 'nord',
+      viewMode: 'rendered',
+      nodeExecPath: 'C:\\Program Files\\nodejs\\node.exe',
+      cliScriptPath: 'C:\\Dev\\exploreio\\dist\\cli.js',
+    });
+    assert.equal(winCmds[0]?.command, 'wt.exe');
+    assert.ok(winCmds[0]?.args.includes('-F'));
+    assert.ok(winCmds[0]?.args.includes('--single'));
+    assert.ok(winCmds[0]?.args.includes('nord'));
+    assert.ok(winCmds[0]?.args.some((a) => a.includes('readme\\;v2.md')));
+    assert.equal(winCmds[1]?.command, 'powershell.exe');
+    assert.ok(winCmds[1]?.env?.EXPLOREIO_LAUNCH_ARGS_JSON?.includes('--single'));
+
+    const macCmds = getFullscreenLaunchCommands('/tmp/doc.md', { platform: 'darwin' });
+    assert.equal(macCmds[0]?.command, 'osascript');
+
+    const linuxCmds = getFullscreenLaunchCommands('/tmp/doc.md', { platform: 'linux' });
+    assert.equal(linuxCmds[0]?.command, 'gnome-terminal');
+    assert.ok(linuxCmds[0]?.args.includes('--full-screen'));
+
+    const emptyRes = await openInFullscreenShell('');
+    assert.equal(emptyRes.ok, false);
+
+    // Fallback quando o primeiro terminal falha (ex.: wt.exe ausente -> powershell maximizado)
+    const tried: string[] = [];
+    const fallbackRes = await openInFullscreenShell('C:\\Dev\\Lyra the Wise WebApp\\readme.md', {
+      platform: 'win32',
+      runner: async (cmd) => {
+        tried.push(cmd.command);
+        if (cmd.command === 'wt.exe') throw new Error('ENOENT');
+      },
+    });
+    assert.equal(fallbackRes.ok, true);
+    assert.equal(fallbackRes.method, 'powershell-maximized');
+    assert.deepEqual(tried, ['wt.exe', 'powershell.exe']);
   });
 });

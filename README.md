@@ -7,13 +7,14 @@ Um gerenciador de arquivos para CLI/terminal inspirado no **Yazi**, projetado pa
 - **Layout 3 Painéis estilo Yazi:** `Diretório Pai` | `Diretório Atual` | `Preview Rico ao Vivo` (responsivo para terminais estreitos).
 - **Leitor Fullscreen Nativo no Prompt (`Enter`):**
   - **Markdown (`.md`, `.mdx`):** títulos estilizados, negrito/itálico/tachado, código inline, links, checklists (`☑`/`☐`), callouts GitHub (`[!NOTE]`, `[!TIP]`, `[!WARNING]`), tabelas Unicode alinhadas, **diagramas Mermaid renderizados inline** e blocos de código com syntax highlighting + toggle `Tab` (*Rendered* ↔ *Raw*).
-  - **Mermaid (`.mmd`, `.mermaid`):** interpretador e renderizador nativo Unicode/ANSI (zero dependências) para `flowchart`/`graph`, `sequenceDiagram`, `stateDiagram`, `classDiagram` e `erDiagram` com adaptação à largura do terminal, fallback seguro e toggle `Tab` (*Diagram* ↔ *Raw*).
+  - **Mermaid (`.mmd`, `.mermaid`):** renderização 2D Unicode/ANSI alimentada pelo motor oficial [**`@leosdc/termaid`**](https://github.com/Leosdc/termaid) (layout Sugiyama, subgraphs reais e roteamento ortogonal) para `flowchart`/`graph`, `sequenceDiagram`, `stateDiagram`, `classDiagram`, `erDiagram`, **`timeline`** e **`gitGraph`**, com adaptação à largura do terminal, fallback seguro e toggle `Tab` (*Diagram* ↔ *Raw*).
   - **JSON (`.json`):** **Tree View interativa** (recolher/expandir nós com `Enter`/`←`/`→`, `e` expande tudo, `c` recolhe tudo) + modo *Pretty Highlighted* + diagnóstico visual de JSON inválido.
   - **HTML (`.html`, `.htm`):** **Modo Reader** limpo (extrai títulos, parágrafos, listas, links, citações, blocos de código e tabelas ignorando `<script>`/`<style>`) + toggle `Tab` para *Source* colorido.
   - **Código-Fonte:** syntax highlighting multi-linguagem leve (TS/JS, Python, Rust, Go, C/C++/Java/C#, CSS, SQL, YAML, TOML, Shell/PowerShell) com números de linha.
   - **Binários:** detecção de assinatura (PNG, JPEG, PDF, ZIP, WASM, ELF, EXE) + prévia segura em *Hex Dump*.
 - **Modo Direto no Prompt (`--print` / `-p`):** renderize qualquer arquivo diretamente no stdout (`exploreio -p README.md`).
 - **Editor Modal Estilo Vim Nativo (`e`):** edite qualquer arquivo de texto/código diretamente dentro do Exploreio com modos `NORMAL`, `INSERT`, `VISUAL`/`V-LINE`, `COMMAND` (`:w`, `:wq`, `:q!`, `:<linha>`) e `SEARCH` (`/`), undo/redo (`u`/`Ctrl+r`), syntax highlighting e preservação de EOL (`\r\n`/`\n`).
+- **Painel Git & GitHub Nativo (`Tab` ou `Ctrl+G`):** badge discreto de branch/pendências no cabeçalho do navegador (`⎇ branch ↑N ●M`) + tela dedicada com 4 abas (**Status & Commits Parados**, **Árvore de Commits**, **Branches** e **GitHub PRs/Issues/Actions via `gh` CLI**), diff ao vivo, barra de botões rápidos e paleta interativa (`?`) para `git pull`, `git push`, `git fetch`, `git commit`, `git branch` e `git stash`.
 - **3 Temas Oficiais de Terminal (`t`):** `midnight`, `parchment` (claro) e `nord` com detecção Truecolor / ANSI 256.
 - **Seguro por Padrão:** sanitização anti-ANSI-injection, limite de 2 MB contra OOM e confirmação obrigatória para exclusões.
 
@@ -21,9 +22,14 @@ Um gerenciador de arquivos para CLI/terminal inspirado no **Yazi**, projetado pa
 
 ### Via npm (Recomendado)
 
+O pacote [**`@leosdc/termaid`**](https://github.com/Leosdc/termaid) é dependência direta do Exploreio e é instalado automaticamente junto com o CLI para renderização de diagramas Mermaid (`.mmd`, `.mermaid` e blocos ` ```mermaid ` em Markdown).
+
 ```bash
-# Instalação global (ativa os comandos `exploreio` e `exp`)
+# Instalação global (ativa os comandos `exploreio` e `exp` + instala `@leosdc/termaid`)
 npm install -g @leosdc/exploreio
+
+# (Opcional) Instale também a CLI standalone do Termaid se quiser rodar `termaid` direto no prompt
+npm install -g @leosdc/termaid
 
 # Ou execute sem instalar
 npx @leosdc/exploreio
@@ -40,6 +46,7 @@ exploreio README.md
 
 # Imprimir renderizado direto no prompt (stdout)
 exploreio -p README.md
+exploreio -p diagrama.mmd
 exploreio -p package.json -m tree -t nord
 exploreio -p index.html -m reader -t parchment
 ```
@@ -47,11 +54,20 @@ exploreio -p index.html -m reader -t parchment
 ### A partir do código-fonte (Desenvolvimento Local)
 
 ```bash
+# Instala as dependências (incluindo `@leosdc/termaid`) e prepara o projeto
 npm install
 npm run setup
 ```
 
 O assistente `npm run setup` (também acionado automaticamente ao instalar localmente em terminal interativo) pergunta se você deseja ativar os comandos globais **`exploreio`** e **`exp`** via `npm link` e permite escolher seu tema padrão (`midnight`, `parchment` ou `nord`), salvo em `~/.exploreiorc.json`.
+
+## 🧩 Dependência de Renderização Mermaid (`@leosdc/termaid`)
+
+A renderização de diagramas Mermaid no **Exploreio** é delegada ao pacote oficial [**`@leosdc/termaid`**](https://github.com/Leosdc/termaid) ([npm](https://www.npmjs.com/package/@leosdc/termaid)), declarado em `dependencies` no `package.json`:
+
+- **Tipos suportados:** `flowchart` / `graph` (com `subgraph`), `sequenceDiagram`, `stateDiagram`, `classDiagram`, `erDiagram`, `timeline` e `gitGraph`.
+- **Fallback seguro:** tipos ainda não suportados pelo Termaid (ex.: `gantt`, `pie`) exibem aviso discreto e o código-fonte destacado sem quebrar a leitura do documento.
+- **Temas sincronizados:** os 3 temas do Exploreio (`midnight`, `parchment`, `nord`) são repassados automaticamente para o motor do Termaid.
 
 ## ⌨️ Principais Atalhos
 
@@ -62,8 +78,12 @@ O assistente `npm run setup` (também acionado automaticamente ao instalar local
 | **Navegador** | `←`/`h`/`Backspace` | Voltar para o diretório pai |
 | **Navegador** | `/` ou `f` | Filtro fuzzy instantâneo no diretório atual |
 | **Navegador** | `.` | Alternar arquivos ocultos |
+| **Navegador / Leitor** | `o` ou `F` | Abrir arquivo em **novo terminal em tela cheia** (ideal em painel splitado) |
 | **Navegador / Leitor** | `y` | Copiar caminho completo selecionado (arquivo ou pasta) |
 | **Navegador** | `a` / `r` / `d` | Criar / Renomear / Excluir (com confirmação) |
+| **Navegador** | `Tab` ou `Ctrl+G` | Abrir **Painel Git & GitHub** (status, commits parados, árvore, branches e PRs) |
+| **Painel Git** | `1`–`4` / `Tab` · `↑`/`↓` · `J`/`K` | Trocar aba · selecionar item · rolar diff/detalhes |
+| **Painel Git** | `s`/`S`/`c` · `p`/`P`/`f`/`b` · `?` | Stage/All/Commit · Pull/Push/Fetch/+Branch · **Paleta de Comandos Rápidos** |
 | **Navegador / Leitor** | `e` *(ou `E` no JSON Tree)* | Abrir arquivo no **Editor Modal Estilo Vim Nativo** |
 | **Editor Vim** | `i`/`I`/`a`/`A`/`o`/`O` · `Esc` | Entrar em `INSERT` · voltar para `NORMAL` |
 | **Editor Vim** | `v`/`V` · `dd`/`yy`/`p` · `u`/`Ctrl+r` | Seleção Visual · deletar/copiar/colar · Undo/Redo |
