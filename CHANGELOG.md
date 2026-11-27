@@ -7,6 +7,11 @@ e este projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR
 
 ---
 
+## [0.6.1] - 2026-11-27
+
+### Corrigido
+- **Painel Git — Listagem de Branches (`branches: 0`):** corrige o separador de formato do `git branch -a --format` de `%x1f` para `%1f` (sintaxe `for-each-ref`), filtra symrefs `refs/remotes/*/HEAD` via `%(refname)` e amplia a suíte de testes unitários e de integração (#20, #21).
+
 ## [0.6.0] - 2026-11-27
 
 ### Adicionado
