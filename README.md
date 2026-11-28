@@ -15,6 +15,7 @@ Um gerenciador de arquivos para CLI/terminal inspirado no **Yazi**, projetado pa
 - **Modo Direto no Prompt (`--print` / `-p`):** renderize qualquer arquivo diretamente no stdout (`exploreio -p README.md`).
 - **Editor Modal Estilo Vim Nativo (`e`):** edite qualquer arquivo de texto/código diretamente dentro do Exploreio com modos `NORMAL`, `INSERT`, `VISUAL`/`V-LINE`, `COMMAND` (`:w`, `:wq`, `:q!`, `:<linha>`) e `SEARCH` (`/`), undo/redo (`u`/`Ctrl+r`), syntax highlighting e preservação de EOL (`\r\n`/`\n`).
 - **Painel Git & GitHub Nativo (`Tab` ou `Ctrl+G`):** badge discreto de branch/pendências no cabeçalho do navegador (`⎇ branch ↑N ●M`) + tela dedicada com 4 abas (**Status & Commits Parados**, **Árvore de Commits**, **Branches** e **GitHub PRs/Issues/Actions via `gh` CLI**), diff ao vivo, barra de botões rápidos e paleta interativa (`?`) para `git pull`, `git push`, `git fetch`, `git commit`, `git branch` e `git stash`.
+- **Keybinds 100% Customizáveis (`K` ou `Ctrl+K`):** personalize qualquer atalho pelo **Painel Interativo de Edição de Binds** direto na TUI (com captura de tecla ao vivo e detecção de conflitos) ou editando o arquivo de configuração base `~/.exploreiorc.json` (`exploreio --init-config`).
 - **3 Temas Oficiais de Terminal (`t`):** `midnight`, `parchment` (claro) e `nord` com detecção Truecolor / ANSI 256.
 - **Seguro por Padrão:** sanitização anti-ANSI-injection, limite de 2 MB contra OOM e confirmação obrigatória para exclusões.
 
@@ -91,7 +92,61 @@ A renderização de diagramas Mermaid no **Exploreio** é delegada ao pacote ofi
 | **Leitor** | `Tab` | Alternar visualização (*Rendered↔Raw*, *Tree↔Pretty*, *Reader↔Source*) |
 | **Leitor (JSON Tree)** | `Enter`/`←`/`→` · `e`/`c` | Abrir/fechar nó selecionado · expandir/recolher tudo |
 | **Leitor** | `/` · `n`/`N` | Buscar texto no arquivo e navegar ocorrências |
-| **Global** | `t` · `?` · `Esc`/`q` | Trocar tema · Ajuda · Voltar/Sair |
+| **Global** | `K` ou `Ctrl+K` | Abrir **Painel Interativo de Edição de Keybinds** (também acessível dentro do `?`) |
+| **Global** | `t` · `?` · `Esc`/`q` | Trocar tema · Ajuda dinâmica · Voltar/Sair |
+
+## 🎛️ Customização de Keybinds & Arquivo de Config Base
+
+Todos os atalhos de navegação, leitura e Painel Git podem ser personalizados do jeito que você preferir, de duas formas:
+
+### 1. Painel Interativo na TUI (`K` ou `Ctrl+K`)
+Pressione **`K`** ou **`Ctrl+K`** (ou abra a ajuda **`?`** e pressione **`K`**) para abrir o **Painel de Edição de Keybinds**:
+- **`1`–`5` / `Tab`:** filtrar por contexto (*Todos*, *Global*, *Navegador*, *Leitor*, *Painel Git*)
+- **`/`:** buscar ações por nome, descrição ou tecla atual
+- **`Enter`:** captura ao vivo da nova tecla principal (`Esc` cancela)
+- **`+` ou `a`:** adicionar tecla alternativa para a mesma ação
+- **`d` ou `Backspace`:** remover última tecla da ação
+- **`r` / `R`:** restaurar ação selecionada / restaurar todos os padrões (com confirmação)
+- **`s`:** salvar imediatamente em `~/.exploreiorc.json` *(ao sair com `Esc`/`q`, alterações pendentes também são salvas)*
+- Conflitos dentro do mesmo contexto são destacados automaticamente com `⚠`, e o modal de ajuda **`?`** (assim como `exploreio --help`) passa a exibir seus atalhos personalizados em tempo real.
+
+### 2. Arquivo de Configuração Base (`~/.exploreiorc.json`)
+Você pode gerar o arquivo de configuração base completo com todos os binds padrão executando:
+
+```bash
+# Gera/atualiza ~/.exploreiorc.json preservando seu tema e binds já customizados
+exploreio --init-config
+
+# Redefine todos os binds para o padrão no ~/.exploreiorc.json
+exploreio --init-config --force
+
+# (Opcional) Executar o Exploreio apontando para outro arquivo de config
+exploreio --config ./meu-exploreiorc.json
+```
+
+Veja o modelo completo versionado em [`exploreiorc.example.json`](./exploreiorc.example.json). Exemplo resumido:
+
+```json
+{
+  "theme": "midnight",
+  "keybinds": {
+    "global": {
+      "quit": ["q"],
+      "help": ["?"],
+      "openKeybinds": ["K", "ctrl+k"],
+      "cycleTheme": ["t"]
+    },
+    "browser": {
+      "moveUp": ["up", "k"],
+      "moveDown": ["down", "j"],
+      "open": ["enter", "right", "l"],
+      "openGitPanel": ["tab", "ctrl+g"]
+    }
+  }
+}
+```
+
+**Sintaxe de teclas aceitas:** `up`, `down`, `left`, `right`, `enter`, `tab`, `shift+tab`, `escape`, `backspace`, `delete`, `space`, `pageup`, `pagedown`, `home`, `end`, combinações `ctrl+<letra>` (ex.: `ctrl+g`, `ctrl+k`) e caracteres imprimíveis diferenciando maiúsculas e minúsculas (`j` ≠ `J`). `Ctrl+C` permanece sempre reservado como saída de emergência.
 
 ## 💡 Dica: Usando em Split no Windows Terminal
 
