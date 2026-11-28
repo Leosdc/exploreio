@@ -6,6 +6,13 @@
  */
 
 import path from 'node:path';
+import {
+  formatKeyEvent,
+  formatKeyForDisplay,
+  loadKeybindsRegistry,
+  saveKeybindsConfig,
+  type KeybindRegistry,
+} from '../config/keybinds.js';
 import { VimEngine } from '../editor/vimEngine.js';
 import { buildEditorFrame, type EditorViewport } from '../editor/vimView.js';
 import {
@@ -63,9 +70,15 @@ import { BOLD, DIM, ITALIC, RESET, fitAnsi, highlightSearch, stripUnsafeAnsi, tr
 import { copyTextToClipboard } from './clipboard.js';
 import { openInFullscreenShell } from './fullscreenLauncher.js';
 import { parseInputChunk, type KeyEvent } from './input.js';
+import {
+  KEYBINDS_TABS,
+  buildKeybindsPanelFrame,
+  getFilteredKeybindDefinitions,
+  type KeybindsFilterTab,
+} from './keybindsView.js';
 import { ScreenBuffer } from './screen.js';
 
-type AppView = 'browser' | 'reader' | 'editor' | 'git';
+type AppView = 'browser' | 'reader' | 'editor' | 'git' | 'keybinds';
 type PromptKind =
   | null
   | 'filter'
@@ -75,7 +88,9 @@ type PromptKind =
   | 'delete'
   | 'git-commit'
   | 'git-branch-create'
-  | 'git-confirm';
+  | 'git-confirm'
+  | 'keybinds-filter'
+  | 'keybinds-reset-confirm';
 
 export interface ExploreioAppOptions {
   readonly startDir: string;
@@ -84,6 +99,7 @@ export interface ExploreioAppOptions {
   readonly singleFile?: boolean;
   readonly themeName?: ThemeName;
   readonly showHidden?: boolean;
+  readonly configPath?: string;
 }
 
 function getFileBadge(entry: FileEntry, theme: ThemePalette): string {
@@ -173,6 +189,17 @@ export class ExploreioApp {
   private gitBusyMessage = '';
   private gitPendingConfirm: { label: string; run: () => Promise<void> } | null = null;
 
+  // Custom Keybinds & Painel Interativo (SPEC-006)
+  private readonly keybinds: KeybindRegistry;
+  private readonly configPath: string;
+  private keybindsTab: KeybindsFilterTab = 'all';
+  private keybindsSelectedIndex = 0;
+  private keybindsScroll = 0;
+  private keybindsFilterQuery = '';
+  private keybindsCaptureMode: null | 'replace' | 'add' = null;
+  private keybindsDirty = false;
+  private keybindsReturnView: 'browser' | 'reader' | 'git' = 'browser';
+
   // Prompt modal inline (barra inferior)
   private promptKind: PromptKind = null;
   private promptInput = '';
@@ -185,6 +212,12 @@ export class ExploreioApp {
     this.singleFile = Boolean(options.singleFile);
     this.themeName = options.themeName ?? 'midnight';
     this.showHidden = Boolean(options.showHidden);
+    const loadedBinds = loadKeybindsRegistry(options.configPath);
+    this.keybinds = loadedBinds.registry;
+    this.configPath = loadedBinds.configPath;
+    if (loadedBinds.warning) {
+      this.toastMessage = loadedBinds.warning;
+    }
     if (options.initialFile) {
       this.currentDir = path.dirname(path.resolve(options.initialFile));
     }
@@ -261,7 +294,13 @@ export class ExploreioApp {
       }
 
       if (this.showHelp) {
-        if (ev.name === 'escape' || ev.char === '?' || ev.char === 'q') {
+        if (this.keybinds.matches('global.openKeybinds', ev)) {
+          this.showHelp = false;
+          const ret = this.view === 'reader' || this.view === 'git' ? this.view : 'browser';
+          this.openKeybindsPanel(ret);
+          continue;
+        }
+        if (ev.name === 'escape' || this.keybinds.matches('global.help', ev) || this.keybinds.matches('global.quit', ev)) {
           this.showHelp = false;
           this.draw();
         }
@@ -275,6 +314,8 @@ export class ExploreioApp {
 
       if (this.view === 'editor') {
         await this.handleEditorKey(ev);
+      } else if (this.view === 'keybinds') {
+        await this.handleKeybindsKey(ev);
       } else if (this.view === 'git') {
         await this.handleGitKey(ev);
       } else if (this.view === 'reader') {
@@ -290,6 +331,10 @@ export class ExploreioApp {
       if (this.promptKind === 'filter') {
         this.filterQuery = '';
         await this.reloadDirectory();
+      } else if (this.promptKind === 'keybinds-filter') {
+        this.keybindsFilterQuery = '';
+        this.keybindsSelectedIndex = 0;
+        this.keybindsScroll = 0;
       }
       this.promptKind = null;
       this.promptInput = '';
@@ -360,6 +405,18 @@ export class ExploreioApp {
         } else {
           this.toastMessage = 'Operação Git cancelada.';
         }
+      } else if (kind === 'keybinds-filter') {
+        this.keybindsFilterQuery = value;
+        this.keybindsSelectedIndex = 0;
+        this.keybindsScroll = 0;
+      } else if (kind === 'keybinds-reset-confirm') {
+        if (value.trim().toLowerCase() === 'y' || value.trim().toLowerCase() === 's') {
+          this.keybinds.resetAll();
+          this.keybindsDirty = true;
+          this.toastMessage = 'Todos os keybinds restaurados para o padrão (pressione s para salvar).';
+        } else {
+          this.toastMessage = 'Reset global cancelado.';
+        }
       }
       this.draw();
       return;
@@ -370,6 +427,10 @@ export class ExploreioApp {
       if (this.promptKind === 'filter') {
         this.filterQuery = this.promptInput;
         await this.reloadDirectory();
+      } else if (this.promptKind === 'keybinds-filter') {
+        this.keybindsFilterQuery = this.promptInput;
+        this.keybindsSelectedIndex = 0;
+        this.keybindsScroll = 0;
       }
       this.draw();
       return;
@@ -380,6 +441,10 @@ export class ExploreioApp {
       if (this.promptKind === 'filter') {
         this.filterQuery = this.promptInput;
         await this.reloadDirectory();
+      } else if (this.promptKind === 'keybinds-filter') {
+        this.keybindsFilterQuery = this.promptInput;
+        this.keybindsSelectedIndex = 0;
+        this.keybindsScroll = 0;
       }
       this.draw();
     }
@@ -389,105 +454,115 @@ export class ExploreioApp {
     this.toastMessage = '';
     const maxIdx = Math.max(0, this.currentEntries.length - 1);
 
-    if (ev.char === 'q') {
+    if (this.keybinds.matches('global.quit', ev)) {
       this.shutdown();
       process.exit(0);
     }
-    if (ev.char === '?') {
+    if (this.keybinds.matches('global.help', ev)) {
       this.showHelp = true;
       this.draw();
       return;
     }
-    if (ev.char === 't') {
+    if (this.keybinds.matches('global.openKeybinds', ev)) {
+      this.openKeybindsPanel('browser');
+      return;
+    }
+    if (this.keybinds.matches('global.cycleTheme', ev)) {
       this.themeName = nextTheme(this.themeName);
       this.toastMessage = `Tema ativo: ${getTheme(this.themeName).label}`;
       await this.refreshSelectedPreview();
       this.draw();
       return;
     }
-    if (ev.char === '.') {
+    if (this.keybinds.matches('browser.toggleHidden', ev)) {
       this.showHidden = !this.showHidden;
       this.toastMessage = this.showHidden ? 'Exibindo arquivos ocultos' : 'Ocultando arquivos iniciados por "."';
       await this.reloadDirectory();
       this.draw();
       return;
     }
-    if (ev.char === '/' || ev.char === 'f') {
+    if (this.keybinds.matches('browser.filter', ev)) {
       this.promptKind = 'filter';
       this.promptInput = this.filterQuery;
       this.draw();
       return;
     }
-    if (ev.char === 'a') {
+    if (this.keybinds.matches('browser.createEntry', ev)) {
       this.promptKind = 'create';
       this.promptInput = '';
       this.draw();
       return;
     }
-    if (ev.char === 'r' && this.currentEntries[this.selectedIndex]) {
+    if (this.keybinds.matches('browser.renameEntry', ev) && this.currentEntries[this.selectedIndex]) {
       this.promptKind = 'rename';
       this.promptInput = this.currentEntries[this.selectedIndex]?.name ?? '';
       this.draw();
       return;
     }
-    if (ev.char === 'd' && this.currentEntries[this.selectedIndex]) {
+    if (this.keybinds.matches('browser.deleteEntry', ev) && this.currentEntries[this.selectedIndex]) {
       this.promptKind = 'delete';
       this.promptInput = '';
       this.draw();
       return;
     }
-    if (ev.char === 'y') {
+    if (this.keybinds.matches('browser.copyPath', ev)) {
       await this.copySelectedPath();
       return;
     }
-    if (ev.char === 'o' || ev.char === 'F') {
+    if (this.keybinds.matches('browser.openFullscreen', ev)) {
       const entry = this.currentEntries[this.selectedIndex];
       if (entry && !entry.isDirectory) {
         await this.openInFullscreenTerminal(entry.fullPath);
       } else {
-        this.toastMessage = 'Selecione um arquivo para abrir em terminal tela cheia (o).';
+        this.toastMessage = `Selecione um arquivo para abrir em terminal tela cheia (${this.keybinds.formatActionKeys('browser.openFullscreen')}).`;
         this.draw();
       }
       return;
     }
-    if (ev.name === 'tab' || (ev.ctrl && ev.name === 'g')) {
+    if (this.keybinds.matches('browser.openGitPanel', ev)) {
       await this.openGitPanel();
       return;
     }
-    if (ev.char === 'e') {
+    if (this.keybinds.matches('browser.refresh', ev)) {
+      await this.reloadDirectory();
+      this.toastMessage = 'Diretório recarregado.';
+      this.draw();
+      return;
+    }
+    if (this.keybinds.matches('browser.openEditor', ev)) {
       const entry = this.currentEntries[this.selectedIndex];
       if (entry && !entry.isDirectory) {
         await this.openFileInEditor(entry.fullPath, 'browser');
       } else {
-        this.toastMessage = 'Selecione um arquivo de texto para abrir no editor Vim (e).';
+        this.toastMessage = `Selecione um arquivo de texto para abrir no editor Vim (${this.keybinds.formatActionKeys('browser.openEditor')}).`;
         this.draw();
       }
       return;
     }
 
-    if (ev.name === 'up' || ev.char === 'k' || ev.name === 'wheel_up') {
+    if (this.keybinds.matches('browser.moveUp', ev) || ev.name === 'wheel_up') {
       if (this.selectedIndex > 0) {
         this.selectedIndex--;
         await this.refreshSelectedPreview();
       }
-    } else if (ev.name === 'down' || ev.char === 'j' || ev.name === 'wheel_down') {
+    } else if (this.keybinds.matches('browser.moveDown', ev) || ev.name === 'wheel_down') {
       if (this.selectedIndex < maxIdx) {
         this.selectedIndex++;
         await this.refreshSelectedPreview();
       }
-    } else if (ev.name === 'pageup') {
+    } else if (this.keybinds.matches('browser.pageUp', ev)) {
       this.selectedIndex = Math.max(0, this.selectedIndex - 10);
       await this.refreshSelectedPreview();
-    } else if (ev.name === 'pagedown') {
+    } else if (this.keybinds.matches('browser.pageDown', ev)) {
       this.selectedIndex = Math.min(maxIdx, this.selectedIndex + 10);
       await this.refreshSelectedPreview();
-    } else if (ev.name === 'home' || ev.char === 'g') {
+    } else if (this.keybinds.matches('browser.goTop', ev)) {
       this.selectedIndex = 0;
       await this.refreshSelectedPreview();
-    } else if (ev.name === 'end' || ev.char === 'G') {
+    } else if (this.keybinds.matches('browser.goBottom', ev)) {
       this.selectedIndex = maxIdx;
       await this.refreshSelectedPreview();
-    } else if (ev.name === 'left' || ev.char === 'h' || ev.name === 'backspace') {
+    } else if (this.keybinds.matches('browser.parentDir', ev)) {
       const parent = path.dirname(this.currentDir);
       if (parent !== this.currentDir) {
         const previousName = path.basename(this.currentDir);
@@ -495,7 +570,7 @@ export class ExploreioApp {
         this.filterQuery = '';
         await this.reloadDirectory(previousName);
       }
-    } else if (ev.name === 'enter' || ev.name === 'right' || ev.char === 'l') {
+    } else if (this.keybinds.matches('browser.open', ev)) {
       const entry = this.currentEntries[this.selectedIndex];
       if (!entry) return;
       if (entry.isDirectory) {
@@ -519,7 +594,7 @@ export class ExploreioApp {
     const totalLines = this.activeDoc?.lines.length ?? 0;
     const isJsonTree = this.activeDoc?.kind === 'json' && this.activeDoc.activeMode === 'tree';
 
-    if (ev.name === 'escape' || ev.char === 'q' || ev.name === 'backspace') {
+    if (this.keybinds.matches('reader.back', ev)) {
       if (this.singleFile) {
         this.shutdown();
         process.exit(0);
@@ -531,35 +606,43 @@ export class ExploreioApp {
       this.draw();
       return;
     }
-    if (ev.char === '?') {
+    if (this.keybinds.matches('global.help', ev)) {
       this.showHelp = true;
       this.draw();
       return;
     }
-    if (ev.char === 't') {
+    if (this.keybinds.matches('global.openKeybinds', ev)) {
+      this.openKeybindsPanel('reader');
+      return;
+    }
+    if (this.keybinds.matches('global.cycleTheme', ev)) {
       this.themeName = nextTheme(this.themeName);
       this.toastMessage = `Tema ativo: ${getTheme(this.themeName).label}`;
       this.rerenderReaderDoc();
       this.draw();
       return;
     }
-    if (ev.char === 'y') {
+    if (this.keybinds.matches('reader.copyPath', ev)) {
       await this.copySelectedPath();
       return;
     }
-    if ((ev.char === 'o' || ev.char === 'F') && this.activeFilePreview) {
+    if (this.keybinds.matches('reader.openFullscreen', ev) && this.activeFilePreview) {
       await this.openInFullscreenTerminal(this.activeFilePreview.filePath, this.activeDoc?.activeMode);
       return;
     }
-    if (ev.ctrl && ev.name === 'g') {
+    if (this.keybinds.matches('reader.openGitPanel', ev)) {
       await this.openGitPanel();
       return;
     }
-    if ((ev.char === 'E' || (ev.char === 'e' && !isJsonTree)) && this.activeFilePreview) {
+    if (
+      this.keybinds.matches('reader.openEditor', ev) &&
+      !(isJsonTree && this.keybinds.matches('reader.jsonExpandAll', ev)) &&
+      this.activeFilePreview
+    ) {
       await this.openFileInEditor(this.activeFilePreview.filePath, 'reader');
       return;
     }
-    if (ev.name === 'tab' && this.activeDoc && this.activeDoc.modes.length > 1) {
+    if (this.keybinds.matches('reader.toggleMode', ev) && this.activeDoc && this.activeDoc.modes.length > 1) {
       const idx = this.activeDoc.modes.indexOf(this.activeDoc.activeMode);
       this.preferredMode = this.activeDoc.modes[(idx + 1) % this.activeDoc.modes.length];
       this.readerScroll = 0;
@@ -569,19 +652,19 @@ export class ExploreioApp {
       this.draw();
       return;
     }
-    if (ev.char === '/') {
+    if (this.keybinds.matches('reader.search', ev)) {
       this.promptKind = 'search';
       this.promptInput = this.readerSearchQuery;
       this.draw();
       return;
     }
-    if (ev.char === 'n' && this.readerSearchMatches.length > 0) {
+    if (this.keybinds.matches('reader.searchNext', ev) && this.readerSearchMatches.length > 0) {
       this.readerSearchCursor = (this.readerSearchCursor + 1) % this.readerSearchMatches.length;
       this.jumpToMatch(this.readerSearchCursor);
       this.draw();
       return;
     }
-    if (ev.char === 'N' && this.readerSearchMatches.length > 0) {
+    if (this.keybinds.matches('reader.searchPrev', ev) && this.readerSearchMatches.length > 0) {
       this.readerSearchCursor =
         (this.readerSearchCursor - 1 + this.readerSearchMatches.length) % this.readerSearchMatches.length;
       this.jumpToMatch(this.readerSearchCursor);
@@ -592,7 +675,7 @@ export class ExploreioApp {
     // Interações exclusivas da Árvore JSON (expandir/recolher)
     if (isJsonTree && this.activeDoc) {
       const row = this.activeDoc.jsonTreeRows[this.readerCursor];
-      if (ev.name === 'enter' || ev.name === 'space') {
+      if (this.keybinds.matches('reader.jsonToggleNode', ev)) {
         if (row?.collapsible) {
           if (this.collapsedJsonPaths.has(row.path)) this.collapsedJsonPaths.delete(row.path);
           else this.collapsedJsonPaths.add(row.path);
@@ -601,7 +684,7 @@ export class ExploreioApp {
         this.draw();
         return;
       }
-      if (ev.name === 'left' || ev.char === 'h') {
+      if (this.keybinds.matches('reader.jsonCollapseNode', ev)) {
         if (row?.collapsible && !row.collapsed) {
           this.collapsedJsonPaths.add(row.path);
           this.rerenderReaderDoc();
@@ -609,7 +692,7 @@ export class ExploreioApp {
         this.draw();
         return;
       }
-      if (ev.name === 'right' || ev.char === 'l') {
+      if (this.keybinds.matches('reader.jsonExpandNode', ev)) {
         if (row?.collapsible && row.collapsed) {
           this.collapsedJsonPaths.delete(row.path);
           this.rerenderReaderDoc();
@@ -617,14 +700,14 @@ export class ExploreioApp {
         this.draw();
         return;
       }
-      if (ev.char === 'e') {
+      if (this.keybinds.matches('reader.jsonExpandAll', ev)) {
         this.collapsedJsonPaths.clear();
         this.rerenderReaderDoc();
         this.toastMessage = 'Todos os nós JSON expandidos';
         this.draw();
         return;
       }
-      if (ev.char === 'c' && this.activeFilePreview) {
+      if (this.keybinds.matches('reader.jsonCollapseAll', ev) && this.activeFilePreview) {
         try {
           const parsed: unknown = JSON.parse(this.activeFilePreview.text);
           const all = collectAllCollapsiblePaths(parsed).filter((p) => p !== '$');
@@ -643,14 +726,14 @@ export class ExploreioApp {
 
     // Scroll & navegação vertical no leitor
     const maxScroll = Math.max(0, totalLines - bodyHeight);
-    if (ev.name === 'up' || ev.char === 'k' || ev.name === 'wheel_up') {
+    if (this.keybinds.matches('reader.moveUp', ev) || ev.name === 'wheel_up') {
       if (isJsonTree) {
         this.readerCursor = Math.max(0, this.readerCursor - 1);
         if (this.readerCursor < this.readerScroll) this.readerScroll = this.readerCursor;
       } else {
         this.readerScroll = Math.max(0, this.readerScroll - (ev.name === 'wheel_up' ? 3 : 1));
       }
-    } else if (ev.name === 'down' || ev.char === 'j' || ev.name === 'wheel_down') {
+    } else if (this.keybinds.matches('reader.moveDown', ev) || ev.name === 'wheel_down') {
       if (isJsonTree) {
         this.readerCursor = Math.min(Math.max(0, totalLines - 1), this.readerCursor + 1);
         if (this.readerCursor >= this.readerScroll + bodyHeight) {
@@ -659,18 +742,18 @@ export class ExploreioApp {
       } else {
         this.readerScroll = Math.min(maxScroll, this.readerScroll + (ev.name === 'wheel_down' ? 3 : 1));
       }
-    } else if (ev.name === 'pageup' || ev.char === 'b') {
+    } else if (this.keybinds.matches('reader.pageUp', ev)) {
       const step = Math.max(4, bodyHeight - 2);
       this.readerScroll = Math.max(0, this.readerScroll - step);
       this.readerCursor = Math.max(0, this.readerCursor - step);
-    } else if (ev.name === 'pagedown' || ev.name === 'space') {
+    } else if (this.keybinds.matches('reader.pageDown', ev)) {
       const step = Math.max(4, bodyHeight - 2);
       this.readerScroll = Math.min(maxScroll, this.readerScroll + step);
       this.readerCursor = Math.min(Math.max(0, totalLines - 1), this.readerCursor + step);
-    } else if (ev.name === 'home' || ev.char === 'g') {
+    } else if (this.keybinds.matches('reader.goTop', ev)) {
       this.readerScroll = 0;
       this.readerCursor = 0;
-    } else if (ev.name === 'end' || ev.char === 'G') {
+    } else if (this.keybinds.matches('reader.goBottom', ev)) {
       this.readerScroll = maxScroll;
       this.readerCursor = Math.max(0, totalLines - 1);
     }
@@ -914,29 +997,47 @@ export class ExploreioApp {
             statusMessage: this.editorStatusMessage,
             statusIsError: this.editorStatusIsError,
           })
-        : this.view === 'git' && this.gitSnapshot
-          ? buildGitPanelFrame(
-              {
-                snapshot: this.gitSnapshot,
-                github: this.gitHubData,
-                activeTab: this.gitTab,
-                selectedIndex: this.gitSelectedIndex,
-                listScroll: this.gitListScroll,
-                detailTitle: this.gitDetailTitle,
-                detailLines: this.gitDetailLines,
-                detailScroll: this.gitDetailScroll,
-                showQuickPalette: this.gitShowQuickPalette,
-                quickPaletteIndex: this.gitQuickPaletteIndex,
-                busyMessage: this.gitBusyMessage,
-                footerLine: this.buildFooterBar(width, theme),
-              },
+        : this.view === 'keybinds'
+          ? buildKeybindsPanelFrame({
               width,
               height,
-              theme
-            )
-          : this.view === 'reader'
-            ? this.buildReaderFrame(width, height, theme)
-            : this.buildBrowserFrame(width, height, theme);
+              theme,
+              registry: this.keybinds,
+              configPath: this.configPath,
+              footerLine: this.buildFooterBar(width, theme),
+              state: {
+                activeTab: this.keybindsTab,
+                selectedIndex: this.keybindsSelectedIndex,
+                scrollOffset: this.keybindsScroll,
+                filterQuery: this.keybindsFilterQuery,
+                captureMode: this.keybindsCaptureMode,
+                dirty: this.keybindsDirty,
+                statusMessage: this.toastMessage,
+              },
+            })
+          : this.view === 'git' && this.gitSnapshot
+            ? buildGitPanelFrame(
+                {
+                  snapshot: this.gitSnapshot,
+                  github: this.gitHubData,
+                  activeTab: this.gitTab,
+                  selectedIndex: this.gitSelectedIndex,
+                  listScroll: this.gitListScroll,
+                  detailTitle: this.gitDetailTitle,
+                  detailLines: this.gitDetailLines,
+                  detailScroll: this.gitDetailScroll,
+                  showQuickPalette: this.gitShowQuickPalette,
+                  quickPaletteIndex: this.gitQuickPaletteIndex,
+                  busyMessage: this.gitBusyMessage,
+                  footerLine: this.buildFooterBar(width, theme),
+                },
+                width,
+                height,
+                theme
+              )
+            : this.view === 'reader'
+              ? this.buildReaderFrame(width, height, theme)
+              : this.buildBrowserFrame(width, height, theme);
 
     if (this.showHelp) {
       this.overlayHelpModal(lines, width, height, theme);
@@ -1080,13 +1181,26 @@ export class ExploreioApp {
         'git-commit': 'git commit -m : ',
         'git-branch-create': 'Nova branch (git checkout -b): ',
         'git-confirm': `${this.gitPendingConfirm?.label ?? 'Confirmar operação Git'}? (y/N): `,
+        'keybinds-filter': 'Filtrar keybinds: ',
+        'keybinds-reset-confirm': 'Restaurar TODOS os keybinds para o padrão? (y/N): ',
       };
       const text = ` ${labels[this.promptKind]}${this.promptInput}█`;
       return `${bg(theme.selectionBg)}${fg(theme.selectionFg)}${BOLD}${fitAnsi(text, width)}${RESET}`;
     }
 
+    if (this.view === 'keybinds' && this.keybindsCaptureMode) {
+      const modeText = this.keybindsCaptureMode === 'replace' ? 'SUBSTITUIR tecla principal' : 'ADICIONAR tecla alternativa';
+      return `${bg(theme.selectionBg)}${fg(theme.selectionFg)}${BOLD}${fitAnsi(` ◉ Pressione a nova tecla para ${modeText} (Esc cancela)`, width)}${RESET}`;
+    }
+
     if (this.toastMessage) {
       return `${bg(theme.statusBg)}${fg(theme.warning)}${BOLD}${fitAnsi(` ◆ ${this.toastMessage}`, width)}${RESET}`;
+    }
+
+    if (this.view === 'keybinds') {
+      const hint =
+        ' Esc/q Voltar · ↑↓ Selecionar · Enter Capturar · +/a Add tecla · d/Bksp Remover · r Reset · R Reset Tudo · s Salvar · / Filtrar · 1-5/Tab Abas';
+      return `${bg(theme.statusBg)}${fg(theme.statusFg)}${fitAnsi(hint, width)}${RESET}`;
     }
 
     if (this.view === 'reader') {
@@ -1112,43 +1226,52 @@ export class ExploreioApp {
 
     const pos = this.currentEntries.length > 0 ? `${this.selectedIndex + 1}/${this.currentEntries.length}` : '0/0';
     const filterTag = this.filterQuery ? ` [filtro: ${this.filterQuery}]` : '';
-    const hint = ` ${pos}${filterTag} · Enter Ler · Tab/Ctrl+G Git · o Tela cheia · e Vim · ←→ Navegar · y Path · / Filtrar · t Tema · ? Ajuda · q Sair`;
+    const kbKey = this.keybinds.formatActionKeys('global.openKeybinds', '/');
+    const helpKey = this.keybinds.formatActionKeys('global.help', '/');
+    const quitKey = this.keybinds.formatActionKeys('global.quit', '/');
+    const hint = ` ${pos}${filterTag} · Enter Ler · Tab/Ctrl+G Git · e Vim · ${kbKey} Binds · t Tema · ${helpKey} Ajuda · ${quitKey} Sair`;
     return `${bg(theme.statusBg)}${fg(theme.statusFg)}${fitAnsi(hint, width)}${RESET}`;
   }
 
   private overlayHelpModal(lines: string[], width: number, height: number, theme: ThemePalette): void {
-    const boxW = Math.min(78, width - 4);
+    const boxW = Math.min(82, width - 4);
+    const k = (id: Parameters<KeybindRegistry['formatActionKeys']>[0]): string =>
+      this.keybinds.formatActionKeys(id, '/');
+    const row = (keys: string, desc: string): string => `  ${keys.padEnd(18).slice(0, 18)} ${desc}`;
+    const kbKey = k('global.openKeybinds');
+
     const helpItems = [
       '  NAVEGADOR (3 Painéis estilo Yazi)',
-      '  ↑/↓ ou j/k       Mover seleção (roda do mouse suportada)',
-      '  Enter ou → / l   Entrar na pasta ou ABRIR ARQUIVO NO LEITOR',
-      '  ← / h / Bksp     Subir para diretório pai',
-      '  / ou f           Filtrar arquivos (fuzzy)',
-      '  .                Mostrar/ocultar arquivos ocultos',
-      '  y                Copiar caminho selecionado (arquivo ou pasta)',
-      '  a / r / d        Criar / Renomear / Excluir (com confirmação)',
-      '  Tab ou Ctrl+G    Abrir PAINEL GIT / GITHUB (status, árvore, branches, PRs)',
+      row(`${k('browser.moveUp')} · ${k('browser.moveDown')}`, 'Mover seleção (roda do mouse suportada)'),
+      row(k('browser.open'), 'Entrar na pasta ou ABRIR ARQUIVO NO LEITOR'),
+      row(k('browser.parentDir'), 'Subir para diretório pai'),
+      row(k('browser.filter'), 'Filtrar arquivos (fuzzy)'),
+      row(k('browser.toggleHidden'), 'Mostrar/ocultar arquivos ocultos'),
+      row(k('browser.copyPath'), 'Copiar caminho selecionado (arquivo ou pasta)'),
+      row(`${k('browser.createEntry')} / ${k('browser.renameEntry')} / ${k('browser.deleteEntry')}`, 'Criar / Renomear / Excluir (com confirmação)'),
+      row(k('browser.openGitPanel'), 'Abrir PAINEL GIT / GITHUB (status, árvore, branches, PRs)'),
       '',
-      '  PAINEL GIT / GITHUB (Tab ou Ctrl+G)',
-      '  1-4 ou Tab       Alternar abas (Status/Parados · Árvore · Branches · GitHub)',
-      '  s / S / c        Stage/Unstage · Stage All · Commit com mensagem',
-      '  p / P / f / b    Pull · Push · Fetch · Criar nova branch (? abre paleta)',
+      '  PAINEL GIT / GITHUB',
+      row(`1-4 / ${k('git.nextTab')}`, 'Alternar abas (Status/Parados · Árvore · Branches · GitHub)'),
+      row(`${k('git.stageToggle')} · ${k('git.stageAll')} · ${k('git.commit')}`, 'Stage/Unstage · Stage All · Commit com mensagem'),
+      row(`${k('git.pull')}/${k('git.push')}/${k('git.fetch')}/${k('git.createBranch')}`, `Pull · Push · Fetch · Nova branch (${k('git.quickPalette')} paleta)`),
       '',
       '  MODO LEITOR FULLSCREEN (Markdown · Mermaid · JSON · HTML · Código)',
-      '  Tab              Alternar modo (Rendered↔Raw | Tree↔Pretty | Reader↔Source)',
-      '  o ou F           Abrir arquivo em novo terminal TELA CHEIA (ideal p/ split)',
-      '  Enter / ← / →    Expandir/recolher nó no JSON Tree (e=tudo, c=recolher)',
-      '  /  e  n / N      Buscar texto no arquivo e saltar ocorrências',
-      '  y                Copiar caminho completo do arquivo aberto',
-      '  e (ou E no JSON) Abrir arquivo no EDITOR VIM NATIVO',
-      '  t                Alternar tema (Midnight · Parchment Light · Nord)',
-      '  Esc ou q         Voltar ao navegador (ou sair)',
+      row(k('reader.toggleMode'), 'Alternar modo (Rendered↔Raw | Tree↔Pretty | Reader↔Source)'),
+      row(k('reader.openFullscreen'), 'Abrir arquivo em novo terminal TELA CHEIA'),
+      row(`${k('reader.jsonToggleNode')}`, `JSON Tree: alternar nó (${k('reader.jsonExpandAll')}=tudo, ${k('reader.jsonCollapseAll')}=recolher)`),
+      row(`${k('reader.search')} · ${k('reader.searchNext')}/${k('reader.searchPrev')}`, 'Buscar texto no arquivo e saltar ocorrências'),
+      row(k('reader.openEditor'), 'Abrir arquivo no EDITOR VIM NATIVO'),
+      row(k('global.cycleTheme'), 'Alternar tema (Midnight · Parchment Light · Nord)'),
+      row(k('reader.back'), 'Voltar ao navegador (ou sair)'),
+      '',
+      '  CUSTOMIZAÇÃO DE KEYBINDS (Pressione ' + kbKey + ' agora para editar!)',
+      row(kbKey, 'Abrir PAINEL INTERATIVO DE EDIÇÃO DE BINDS'),
+      row('~/.exploreiorc.json', 'Config base (rode "exploreio --init-config" para gerar)'),
       '',
       '  MODO EDITOR VIM (NORMAL · INSERT · VISUAL · COMMAND)',
-      '  i/I/a/A/o/O      Entrar em INSERT (Esc volta para NORMAL)',
-      '  hjkl · w/b/e     Navegar · 0/^/$ · gg/G · Ctrl+d/u · / Buscar (n/N)',
-      '  x · dd · yy · p  Editar · v/V Visual (y/d/c) · u Undo · Ctrl+r Redo',
-      '  :w · :wq · :q!   Salvar · Salvar e sair · Sair sem salvar · :<linha>',
+      row('i/I/a/A/o/O · Esc', 'Entrar em INSERT · voltar para NORMAL'),
+      row(':w · :wq · :q!', 'Salvar · Salvar e sair · Sair sem salvar · :<linha>'),
     ];
 
     const startRow = Math.max(1, Math.floor((height - (helpItems.length + 4)) / 2));
@@ -1157,11 +1280,15 @@ export class ExploreioApp {
 
     const modalLines: string[] = [
       `${padLeft}${fg(theme.borderActive)}${BOLD}╭${'─'.repeat(innerW)}╮${RESET}`,
-      `${padLeft}${fg(theme.borderActive)}${BOLD}│${bg(theme.headerBg)}${fg(theme.accent)}${fitAnsi('  ◈ EXPLOREIO — ATALHOS DE TECLADO (Esc/? para fechar)', innerW)}${RESET}${fg(theme.borderActive)}${BOLD}│${RESET}`,
-      ...helpItems.map(
-        (item) =>
-          `${padLeft}${fg(theme.borderActive)}│${bg(theme.statusBg)}${fg(item.startsWith('  NAVEGADOR') || item.startsWith('  MODO') ? theme.accentAlt : theme.text)}${fitAnsi(item, innerW)}${RESET}${fg(theme.borderActive)}│${RESET}`
-      ),
+      `${padLeft}${fg(theme.borderActive)}${BOLD}│${bg(theme.headerBg)}${fg(theme.accent)}${fitAnsi(`  ◈ EXPLOREIO — ATALHOS (${kbKey} Editar Binds · Esc/? Fechar)`, innerW)}${RESET}${fg(theme.borderActive)}${BOLD}│${RESET}`,
+      ...helpItems.map((item) => {
+        const isHeader =
+          item.startsWith('  NAVEGADOR') ||
+          item.startsWith('  PAINEL') ||
+          item.startsWith('  MODO') ||
+          item.startsWith('  CUSTOMIZAÇÃO');
+        return `${padLeft}${fg(theme.borderActive)}│${bg(theme.statusBg)}${fg(isHeader ? theme.accentAlt : theme.text)}${fitAnsi(item, innerW)}${RESET}${fg(theme.borderActive)}│${RESET}`;
+      }),
       `${padLeft}${fg(theme.borderActive)}${BOLD}╰${'─'.repeat(innerW)}╯${RESET}`,
     ];
 
@@ -1504,19 +1631,23 @@ export class ExploreioApp {
       return;
     }
 
-    if (ev.name === 'escape' || ev.char === 'q') {
+    if (this.keybinds.matches('git.back', ev)) {
       this.view = 'browser';
       await this.reloadDirectory();
       this.draw();
       return;
     }
-    if (ev.char === 't') {
+    if (this.keybinds.matches('global.cycleTheme', ev)) {
       this.themeName = nextTheme(this.themeName);
       this.toastMessage = `Tema ativo: ${getTheme(this.themeName).label}`;
       this.draw();
       return;
     }
-    if (ev.char === '?' && this.gitSnapshot?.isGitRepo) {
+    if (this.keybinds.matches('global.openKeybinds', ev) && !this.keybinds.matches('git.detailUp', ev)) {
+      this.openKeybindsPanel('git');
+      return;
+    }
+    if (this.keybinds.matches('git.quickPalette', ev) && this.gitSnapshot?.isGitRepo) {
       this.gitShowQuickPalette = true;
       this.gitQuickPaletteIndex = 0;
       this.draw();
@@ -1527,7 +1658,7 @@ export class ExploreioApp {
       return;
     }
 
-    // Troca de abas (1..4 ou Tab / Shift+Tab)
+    // Troca de abas (1..4 ou nextTab / prevTab)
     const tabOrder: readonly GitPanelTab[] = ['status', 'graph', 'branches', 'github'];
     if (ev.char === '1' || ev.char === '2' || ev.char === '3' || ev.char === '4') {
       const nextTab = tabOrder[Number(ev.char) - 1] ?? 'status';
@@ -1541,9 +1672,10 @@ export class ExploreioApp {
       this.draw();
       return;
     }
-    if (ev.name === 'tab') {
+    if (this.keybinds.matches('git.prevTab', ev) || this.keybinds.matches('git.nextTab', ev)) {
       const idx = tabOrder.indexOf(this.gitTab);
-      const nextIdx = ev.shift ? (idx - 1 + tabOrder.length) % tabOrder.length : (idx + 1) % tabOrder.length;
+      const goPrev = this.keybinds.matches('git.prevTab', ev);
+      const nextIdx = goPrev ? (idx - 1 + tabOrder.length) % tabOrder.length : (idx + 1) % tabOrder.length;
       this.gitTab = tabOrder[nextIdx] ?? 'status';
       this.gitSelectedIndex = 0;
       this.gitListScroll = 0;
@@ -1554,70 +1686,78 @@ export class ExploreioApp {
     }
 
     // Navegação na lista
-    if (ev.name === 'up' || ev.char === 'k' || ev.name === 'wheel_up') {
+    if (this.keybinds.matches('git.moveUp', ev) || ev.name === 'wheel_up') {
       this.moveGitSelection(-1);
       await this.refreshGitDetail();
       this.draw();
       return;
     }
-    if (ev.name === 'down' || ev.char === 'j' || ev.name === 'wheel_down') {
+    if (this.keybinds.matches('git.moveDown', ev) || ev.name === 'wheel_down') {
       this.moveGitSelection(1);
       await this.refreshGitDetail();
       this.draw();
       return;
     }
     // Rolagem do painel direito (diff / detalhes)
-    if (ev.char === 'J' || ev.name === 'pagedown') {
+    if (this.keybinds.matches('git.detailDown', ev)) {
       this.gitDetailScroll = Math.min(Math.max(0, this.gitDetailLines.length - 5), this.gitDetailScroll + 8);
       this.draw();
       return;
     }
-    if (ev.char === 'K' || ev.name === 'pageup') {
+    if (this.keybinds.matches('git.detailUp', ev)) {
       this.gitDetailScroll = Math.max(0, this.gitDetailScroll - 8);
       this.draw();
       return;
     }
 
     // Ações rápidas diretas
-    if (ev.char === 'r') {
+    if (this.keybinds.matches('git.refresh', ev)) {
       await this.refreshGitPanelData(true);
       this.toastMessage = 'Painel Git/GitHub atualizado.';
       this.draw();
       return;
     }
-    if (ev.char === 'f') {
+    if (this.keybinds.matches('git.fetch', ev)) {
       await this.triggerGitQuickAction('fetch');
       return;
     }
-    if (ev.char === 'p') {
+    if (this.keybinds.matches('git.pull', ev)) {
       await this.triggerGitQuickAction('pull');
       return;
     }
-    if (ev.char === 'P') {
+    if (this.keybinds.matches('git.push', ev)) {
       await this.triggerGitQuickAction('push');
       return;
     }
-    if (ev.char === 'c') {
+    if (this.keybinds.matches('git.commit', ev)) {
       await this.triggerGitQuickAction('commit');
       return;
     }
-    if (ev.char === 'b') {
+    if (this.keybinds.matches('git.createBranch', ev)) {
       await this.triggerGitQuickAction('create-branch');
       return;
     }
-    if (ev.char === 'S') {
+    if (this.keybinds.matches('git.stageAll', ev)) {
       await this.triggerGitQuickAction('stage-all');
       return;
     }
-    if (ev.char === 'U') {
+    if (this.keybinds.matches('git.unstageAll', ev)) {
       const res = await gitUnstageAll(this.gitSnapshot.repoRoot);
       this.toastMessage = res.ok ? 'Todas as alterações removidas do stage.' : (res.errorMessage ?? 'Erro no unstage.');
       await this.refreshGitPanelData(false);
       return;
     }
+    if (this.keybinds.matches('git.stashPush', ev)) {
+      await this.triggerGitQuickAction('stash-push');
+      return;
+    }
+    if (this.keybinds.matches('git.stashPop', ev)) {
+      await this.triggerGitQuickAction('stash-pop');
+      return;
+    }
 
     // Stage / Unstage individual na aba Status
-    if ((ev.char === 's' || ev.name === 'space') && this.gitTab === 'status') {
+    if (this.keybinds.matches('git.stageToggle', ev) && this.gitTab === 'status') {
       const item = buildStatusListItems(this.gitSnapshot)[this.gitSelectedIndex];
       if (item?.kind === 'file') {
         const res =
@@ -1633,7 +1773,7 @@ export class ExploreioApp {
     }
 
     // Descartar alterações de um arquivo (com confirmação obrigatória)
-    if (ev.char === 'x' && this.gitTab === 'status') {
+    if (this.keybinds.matches('git.discard', ev) && this.gitTab === 'status') {
       const item = buildStatusListItems(this.gitSnapshot)[this.gitSelectedIndex];
       if (item?.kind === 'file' && item.entry.section !== 'staged') {
         const entry = item.entry;
@@ -1648,13 +1788,13 @@ export class ExploreioApp {
     }
 
     // Copiar hash / path / branch / URL
-    if (ev.char === 'y') {
+    if (this.keybinds.matches('git.copyItem', ev)) {
       await this.copyActiveGitItem();
       return;
     }
 
     // Enter contextual por aba
-    if (ev.name === 'enter') {
+    if (this.keybinds.matches('git.openItem', ev)) {
       if (this.gitTab === 'branches') {
         const br = this.gitSnapshot.branches[this.gitSelectedIndex];
         if (br && !br.isCurrent) {
@@ -1821,5 +1961,201 @@ export class ExploreioApp {
       ? `Copiado: ${stripUnsafeAnsi(value)}`
       : `Falha ao copiar: ${stripUnsafeAnsi(res.error ?? 'clipboard indisponível')}`;
     this.draw();
+  }
+
+  // ==================== PAINEL DE EDIÇÃO DE KEYBINDS (SPEC-006) ====================
+
+  private openKeybindsPanel(returnTo: 'browser' | 'reader' | 'git'): void {
+    this.keybindsReturnView = returnTo;
+    this.view = 'keybinds';
+    this.keybindsCaptureMode = null;
+    this.toastMessage = '';
+    this.clampKeybindsSelection();
+    this.draw();
+  }
+
+  private clampKeybindsSelection(): void {
+    const items = getFilteredKeybindDefinitions(this.keybinds, this.keybindsTab, this.keybindsFilterQuery);
+    const { height } = this.screen.getSize();
+    const bodyHeight = Math.max(4, height - 3);
+    if (items.length === 0) {
+      this.keybindsSelectedIndex = 0;
+      this.keybindsScroll = 0;
+      return;
+    }
+    this.keybindsSelectedIndex = Math.max(0, Math.min(items.length - 1, this.keybindsSelectedIndex));
+    if (this.keybindsSelectedIndex < this.keybindsScroll) {
+      this.keybindsScroll = this.keybindsSelectedIndex;
+    } else if (this.keybindsSelectedIndex >= this.keybindsScroll + bodyHeight) {
+      this.keybindsScroll = this.keybindsSelectedIndex - bodyHeight + 1;
+    }
+  }
+
+  private saveKeybindsNow(): void {
+    const res = saveKeybindsConfig(this.keybinds, this.configPath, this.themeName);
+    if (res.ok) {
+      this.keybindsDirty = false;
+      this.toastMessage = `Keybinds salvos em ${stripUnsafeAnsi(this.configPath)}`;
+    } else {
+      this.toastMessage = `Erro ao salvar keybinds: ${stripUnsafeAnsi(res.error ?? 'falha de escrita')}`;
+    }
+  }
+
+  private async handleKeybindsKey(ev: KeyEvent): Promise<void> {
+    this.toastMessage = '';
+    const items = getFilteredKeybindDefinitions(this.keybinds, this.keybindsTab, this.keybindsFilterQuery);
+    const selected = items[this.keybindsSelectedIndex];
+
+    // Modo de captura de tecla ao vivo
+    if (this.keybindsCaptureMode) {
+      if (ev.name === 'escape') {
+        this.keybindsCaptureMode = null;
+        this.toastMessage = 'Captura de tecla cancelada.';
+        this.draw();
+        return;
+      }
+      const captured = formatKeyEvent(ev);
+      const mode = this.keybindsCaptureMode;
+      this.keybindsCaptureMode = null;
+
+      if (!captured || !selected) {
+        this.toastMessage = 'Tecla não suportada para bind.';
+        this.draw();
+        return;
+      }
+
+      const changed =
+        mode === 'replace'
+          ? this.keybinds.replacePrimaryKey(selected.id, captured)
+          : this.keybinds.addKey(selected.id, captured);
+
+      if (changed) {
+        this.keybindsDirty = true;
+        const conflicts = this.keybinds.getConflictsForAction(selected.id);
+        const label = formatKeyForDisplay(captured);
+        this.toastMessage =
+          conflicts.length > 0
+            ? `Tecla [${label}] aplicada com ⚠ conflito em ${selected.context} (pressione s para salvar).`
+            : `Tecla [${label}] aplicada em "${selected.label}" (pressione s para salvar).`;
+      } else {
+        this.toastMessage = `Tecla [${formatKeyForDisplay(captured)}] já estava atribuída.`;
+      }
+      this.draw();
+      return;
+    }
+
+    if (ev.name === 'escape' || ev.char === 'q') {
+      if (this.keybindsDirty) {
+        this.saveKeybindsNow();
+      }
+      this.view = this.keybindsReturnView;
+      this.draw();
+      return;
+    }
+
+    if (ev.char === 't') {
+      this.themeName = nextTheme(this.themeName);
+      this.toastMessage = `Tema ativo: ${getTheme(this.themeName).label}`;
+      this.draw();
+      return;
+    }
+
+    // Troca de aba por número (1..5) ou Tab / Shift+Tab
+    if (ev.char && ev.char >= '1' && ev.char <= '5') {
+      const tab = KEYBINDS_TABS[Number(ev.char) - 1];
+      if (tab) {
+        this.keybindsTab = tab.id;
+        this.keybindsSelectedIndex = 0;
+        this.keybindsScroll = 0;
+        this.clampKeybindsSelection();
+      }
+      this.draw();
+      return;
+    }
+    if (ev.name === 'tab') {
+      const idx = KEYBINDS_TABS.findIndex((t) => t.id === this.keybindsTab);
+      const nextIdx = ev.shift
+        ? (idx - 1 + KEYBINDS_TABS.length) % KEYBINDS_TABS.length
+        : (idx + 1) % KEYBINDS_TABS.length;
+      this.keybindsTab = KEYBINDS_TABS[nextIdx]?.id ?? 'all';
+      this.keybindsSelectedIndex = 0;
+      this.keybindsScroll = 0;
+      this.clampKeybindsSelection();
+      this.draw();
+      return;
+    }
+
+    if (ev.char === '/') {
+      this.promptKind = 'keybinds-filter';
+      this.promptInput = this.keybindsFilterQuery;
+      this.draw();
+      return;
+    }
+    if (ev.char === 's') {
+      this.saveKeybindsNow();
+      this.draw();
+      return;
+    }
+    if (ev.char === 'R') {
+      this.promptKind = 'keybinds-reset-confirm';
+      this.promptInput = '';
+      this.draw();
+      return;
+    }
+
+    // Navegação vertical
+    if (ev.name === 'up' || ev.char === 'k' || ev.name === 'wheel_up') {
+      this.keybindsSelectedIndex = Math.max(0, this.keybindsSelectedIndex - 1);
+      this.clampKeybindsSelection();
+      this.draw();
+      return;
+    }
+    if (ev.name === 'down' || ev.char === 'j' || ev.name === 'wheel_down') {
+      this.keybindsSelectedIndex = Math.min(Math.max(0, items.length - 1), this.keybindsSelectedIndex + 1);
+      this.clampKeybindsSelection();
+      this.draw();
+      return;
+    }
+    if (ev.name === 'pageup') {
+      this.keybindsSelectedIndex = Math.max(0, this.keybindsSelectedIndex - 10);
+      this.clampKeybindsSelection();
+      this.draw();
+      return;
+    }
+    if (ev.name === 'pagedown') {
+      this.keybindsSelectedIndex = Math.min(Math.max(0, items.length - 1), this.keybindsSelectedIndex + 10);
+      this.clampKeybindsSelection();
+      this.draw();
+      return;
+    }
+
+    if (!selected) return;
+
+    if (ev.name === 'enter') {
+      this.keybindsCaptureMode = 'replace';
+      this.draw();
+      return;
+    }
+    if (ev.char === '+' || ev.char === 'a') {
+      this.keybindsCaptureMode = 'add';
+      this.draw();
+      return;
+    }
+    if (ev.char === 'd' || ev.name === 'backspace') {
+      if (this.keybinds.removeLastKey(selected.id)) {
+        this.keybindsDirty = true;
+        this.toastMessage = `Última tecla removida de "${selected.label}" (pressione s para salvar).`;
+      } else {
+        this.toastMessage = 'Cada ação precisa manter pelo menos 1 tecla ativa.';
+      }
+      this.draw();
+      return;
+    }
+    if (ev.char === 'r') {
+      this.keybinds.resetAction(selected.id);
+      this.keybindsDirty = true;
+      this.toastMessage = `Ação "${selected.label}" restaurada para o padrão.`;
+      this.draw();
+    }
   }
 }

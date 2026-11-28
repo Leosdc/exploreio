@@ -7,6 +7,11 @@ e este projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR
 
 ---
 
+## [0.7.0] - 2026-11-27
+
+### Adicionado
+- **Customização de Keybinds, Config Base & Painel Interativo (`K` ou `Ctrl+K`):** motor tipado de keybinds (`src/config/keybinds.ts`) cobrindo `global`, `browser`, `reader` e `git` com detecção de conflitos e persistência fail-safe em `~/.exploreiorc.json`, arquivo de configuração base versionado (`exploreiorc.example.json`), flags CLI `--init-config [--force]` e `--config <arquivo>`, **Painel Interativo de Edição de Binds** na TUI (`src/tui/keybindsView.ts`) nos 3 temas oficiais e ajuda dinâmica (`?` e `--help`) exibindo os atalhos efetivos do usuário (#23, #24).
+
 ## [0.6.1] - 2026-11-27
 
 ### Corrigido
