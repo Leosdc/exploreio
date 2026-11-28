@@ -13,13 +13,19 @@ import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  getDefaultConfigPath,
+  initBaseConfigFile,
+  loadKeybindsRegistry,
+  type KeybindRegistry,
+} from './config/keybinds.js';
 import { safeReadFilePreview } from './fs/explorer.js';
 import { renderDocument, type ViewMode } from './renderers/index.js';
 import { fg, getTheme, type ThemeName, type ThemePalette } from './themes/palette.js';
 import { BOLD, DIM, RESET } from './tui/ansi.js';
 import { ExploreioApp } from './tui/app.js';
 
-export const VERSION = '0.5.0';
+export const VERSION = '0.6.1';
 
 export function loadSavedDefaultTheme(): ThemeName {
   try {
@@ -42,6 +48,9 @@ export interface ParsedCliArgs {
   readonly singleFile: boolean;
   readonly showHelp: boolean;
   readonly showVersion: boolean;
+  readonly initConfig: boolean;
+  readonly forceConfig: boolean;
+  readonly configPath?: string;
 }
 
 const VALID_MODES = new Set<ViewMode>(['rendered', 'raw', 'tree', 'pretty', 'reader', 'source', 'code', 'hex']);
@@ -57,6 +66,9 @@ export function parseCliArgs(argv: readonly string[], defaultTheme: ThemeName = 
   let singleFile = false;
   let showHelp = false;
   let showVersion = false;
+  let initConfig = false;
+  let forceConfig = false;
+  let configPath: string | undefined;
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i] ?? '';
@@ -70,6 +82,12 @@ export function parseCliArgs(argv: readonly string[], defaultTheme: ThemeName = 
       showHidden = true;
     } else if (arg === '--single') {
       singleFile = true;
+    } else if (arg === '--init-config') {
+      initConfig = true;
+    } else if (arg === '--force') {
+      forceConfig = true;
+    } else if ((arg === '-c' || arg === '--config') && argv[i + 1]) {
+      configPath = argv[++i];
     } else if ((arg === '-t' || arg === '--theme') && argv[i + 1]) {
       theme = getTheme(argv[++i]).name;
     } else if ((arg === '-m' || arg === '--mode') && argv[i + 1]) {
@@ -84,14 +102,32 @@ export function parseCliArgs(argv: readonly string[], defaultTheme: ThemeName = 
     }
   }
 
-  return { target, printMode, theme, viewMode, width, showHidden, singleFile, showHelp, showVersion };
+  return {
+    target,
+    printMode,
+    theme,
+    viewMode,
+    width,
+    showHidden,
+    singleFile,
+    showHelp,
+    showVersion,
+    initConfig,
+    forceConfig,
+    configPath,
+  };
 }
 
-export function getHelpText(theme: ThemePalette = getTheme(loadSavedDefaultTheme())): string {
+export function getHelpText(
+  theme: ThemePalette = getTheme(loadSavedDefaultTheme()),
+  registry: KeybindRegistry = loadKeybindsRegistry().registry
+): string {
   const h = (title: string): string => `${fg(theme.accentAlt)}${BOLD}▌ ${title}${RESET}`;
   const cmd = (text: string): string => `${fg(theme.accent)}${BOLD}${text}${RESET}`;
   const dim = (text: string): string => `${fg(theme.muted)}${DIM}${text}${RESET}`;
   const txt = (text: string): string => `${fg(theme.text)}${text}${RESET}`;
+  const k = (id: Parameters<KeybindRegistry['formatActionKeys']>[0]): string =>
+    registry.formatActionKeys(id, '/');
 
   return [
     `${fg(theme.accent)}${BOLD}╔══════════════════════════════════════════════════════════════════════╗${RESET}`,
@@ -121,20 +157,28 @@ export function getHelpText(theme: ThemePalette = getTheme(loadSavedDefaultTheme
     `  ${cmd('-w, --width <colunas>')}             ${txt('Largura máxima de renderização no modo --print')}`,
     `  ${cmd('-a, --all')}                         ${txt('Exibe arquivos ocultos (iniciados por ".") ao abrir')}`,
     `  ${cmd('--single')}                          ${txt('Abre o arquivo direto no Leitor e fecha ao pressionar Esc/q')}`,
+    `  ${cmd('--init-config [--force]')}           ${txt('Gera/atualiza ~/.exploreiorc.json com o config base de keybinds')}`,
+    `  ${cmd('-c, --config <arquivo>')}            ${txt('Usa um arquivo JSON de configuração/keybinds alternativo')}`,
     `  ${cmd('-v, --version')}                     ${txt('Exibe a versão instalada')}`,
     `  ${cmd('-h, --help')}                        ${txt('Exibe este guia de uso')}`,
     '',
-    h('ATALHOS ESSENCIAIS NA TUI'),
-    `  ${cmd('↑/↓ ou j/k')}  Mover (roda do mouse)      ${cmd('Enter / →')}  Entrar na pasta ou ABRIR no Leitor`,
-    `  ${cmd('← / Bksp')}    Subir diretório            ${cmd('Tab')}        Alternar modo (Rendered↔Raw / Tree↔Pretty)`,
-    `  ${cmd('o / F')}       Abrir em shell Fullscreen  ${cmd('e')}          Abrir no Editor Vim nativo`,
-    `  ${cmd('/ ou f')}      Filtrar / Buscar (n/N)     ${cmd('t')}          Trocar tema (Midnight · Parchment · Nord)`,
-    `  ${cmd('e / c')}       Expandir/Recolher JSON     ${cmd('a / r / d')}  Criar / Renomear / Excluir arquivo`,
-    `  ${cmd('y')}           Copiar caminho (path)      ${cmd('.')}          Alternar arquivos ocultos`,
-    `  ${cmd('?')}           Ajuda completa             ${cmd('Esc / q')}    Voltar ou Sair`,
+    h('ATALHOS ESSENCIAIS NA TUI (CUSTOMIZÁVEIS)'),
+    `  ${cmd(`${k('browser.moveUp')} · ${k('browser.moveDown')}`)}  Mover (roda do mouse)      ${cmd(k('browser.open'))}  Entrar / ABRIR no Leitor`,
+    `  ${cmd(k('browser.parentDir'))}  Subir diretório            ${cmd(k('reader.toggleMode'))}  Alternar modo no Leitor`,
+    `  ${cmd(k('browser.openFullscreen'))}  Abrir em shell Fullscreen  ${cmd(k('browser.openEditor'))}  Abrir no Editor Vim nativo`,
+    `  ${cmd(k('browser.filter'))}  Filtrar / Buscar (n/N)     ${cmd(k('global.cycleTheme'))}  Trocar tema`,
+    `  ${cmd(k('browser.openGitPanel'))}  Painel Git & GitHub        ${cmd(`${k('browser.createEntry')}/${k('browser.renameEntry')}/${k('browser.deleteEntry')}`)}  Criar / Renomear / Excluir`,
+    `  ${cmd(k('browser.copyPath'))}  Copiar caminho (path)      ${cmd(k('browser.toggleHidden'))}  Alternar arquivos ocultos`,
+    `  ${cmd(k('global.openKeybinds'))}  Painel de Edição de Binds  ${cmd(k('global.help'))}  Ajuda · ${cmd(k('global.quit'))} Sair`,
+    '',
+    h('CUSTOMIZAÇÃO DE KEYBINDS'),
+    `  ${txt('Personalize qualquer atalho de duas formas:')}`,
+    `  ${cmd('1. Painel Interativo na TUI:')}      ${txt(`pressione ${k('global.openKeybinds')} (ou abra ${k('global.help')} e aperte ${k('global.openKeybinds')})`)}`,
+    `  ${cmd('2. Arquivo de config base:')}        ${txt(`rode "exploreio --init-config" e edite ~/.exploreiorc.json`)}`,
     '',
     h('EXEMPLOS PRÁTICOS'),
     `  ${cmd('exploreio')}                                ${dim('# Navegador 3 colunas na pasta atual')}`,
+    `  ${cmd('exploreio --init-config')}                  ${dim('# Cria ~/.exploreiorc.json com todos os binds')}`,
     `  ${cmd('exploreio README.md')}                      ${dim('# Abre README.md no Leitor Fullscreen')}`,
     `  ${cmd('exp -p package.json -m tree -t nord')}      ${dim('# Árvore JSON colorida direto no prompt')}`,
     `  ${cmd('exp -p index.html -m reader -t parchment')} ${dim('# HTML legível em tema claro no prompt')}`,
@@ -143,13 +187,26 @@ export function getHelpText(theme: ThemePalette = getTheme(loadSavedDefaultTheme
 
 export async function runCli(argv: readonly string[] = process.argv.slice(2)): Promise<number> {
   const args = parseCliArgs(argv);
+  const configPath = args.configPath ? path.resolve(args.configPath) : getDefaultConfigPath();
 
   if (args.showHelp) {
-    process.stdout.write(`${getHelpText(getTheme(args.theme))}\n`);
+    const loaded = loadKeybindsRegistry(configPath);
+    process.stdout.write(`${getHelpText(getTheme(args.theme), loaded.registry)}\n`);
     return 0;
   }
   if (args.showVersion) {
     process.stdout.write(`exploreio v${VERSION}\n`);
+    return 0;
+  }
+  if (args.initConfig) {
+    const res = initBaseConfigFile(configPath, { force: args.forceConfig, theme: args.theme });
+    if (!res.ok) {
+      process.stderr.write(`Exploreio: erro ao gerar config base (${res.configPath}) — ${res.error ?? 'desconhecido'}\n`);
+      return 1;
+    }
+    const verb = res.created ? 'criado' : args.forceConfig ? 'redefinido' : 'atualizado';
+    process.stdout.write(`Exploreio: arquivo de configuração base ${verb} em ${res.configPath}\n`);
+    process.stdout.write('Edite a seção "keybinds" manualmente ou abra o Exploreio e pressione K / Ctrl+K.\n');
     return 0;
   }
 
@@ -184,6 +241,7 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
     singleFile: isFile && args.singleFile,
     themeName: args.theme,
     showHidden: args.showHidden,
+    configPath,
   });
 
   await app.start(isFile ? resolvedTarget : undefined);
