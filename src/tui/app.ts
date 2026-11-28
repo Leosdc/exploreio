@@ -49,12 +49,16 @@ import {
 } from '../git/gitView.js';
 import {
   createFileOrDir,
+  createFileSafe,
+  createFolderSafe,
   deleteEntry,
+  duplicateEntrySafe,
   formatBytes,
   readDirectoryEntries,
   renameEntry,
   safeReadFilePreview,
   safeWriteTextFile,
+  suggestDuplicateName,
   type FileEntry,
   type SafeFilePreview,
 } from '../fs/explorer.js';
@@ -68,6 +72,14 @@ import {
 import { bg, fg, getTheme, nextTheme, type ThemeName, type ThemePalette } from '../themes/palette.js';
 import { BOLD, DIM, ITALIC, RESET, fitAnsi, highlightSearch, stripUnsafeAnsi, truncateAnsi, visibleLength } from './ansi.js';
 import { copyTextToClipboard } from './clipboard.js';
+import {
+  applyModalOverlay,
+  createInitialModalState,
+  cycleModalExtension,
+  renderCreateEntryModalOverlay,
+  resolveModalTargetName,
+  type CreateEntryModalState,
+} from './createEntryModal.js';
 import { openInFullscreenShell } from './fullscreenLauncher.js';
 import { parseInputChunk, type KeyEvent } from './input.js';
 import {
@@ -84,6 +96,7 @@ type PromptKind =
   | 'filter'
   | 'search'
   | 'create'
+  | 'duplicate'
   | 'rename'
   | 'delete'
   | 'git-commit'
@@ -200,9 +213,10 @@ export class ExploreioApp {
   private keybindsDirty = false;
   private keybindsReturnView: 'browser' | 'reader' | 'git' = 'browser';
 
-  // Prompt modal inline (barra inferior)
+  // Prompt modal inline (barra inferior) & Modal de criação arquivo/pasta (SPEC-007)
   private promptKind: PromptKind = null;
   private promptInput = '';
+  private createModal: CreateEntryModalState | null = null;
   private toastMessage = '';
   private running = false;
 
@@ -307,6 +321,11 @@ export class ExploreioApp {
         continue;
       }
 
+      if (this.createModal) {
+        await this.handleCreateModalKey(ev);
+        continue;
+      }
+
       if (this.promptKind) {
         await this.handlePromptKey(ev);
         continue;
@@ -363,11 +382,22 @@ export class ExploreioApp {
         }
       } else if (kind === 'create' && value.trim()) {
         try {
-          await createFileOrDir(this.currentDir, value);
+          const created = await createFileOrDir(this.currentDir, value);
           this.toastMessage = `Criado: ${value.trim()}`;
-          await this.reloadDirectory();
+          await this.reloadDirectory(path.basename(created));
         } catch (err) {
           this.toastMessage = err instanceof Error ? err.message : String(err);
+        }
+      } else if (kind === 'duplicate' && value.trim()) {
+        const current = this.currentEntries[this.selectedIndex];
+        if (current) {
+          try {
+            const res = await duplicateEntrySafe(current.fullPath, value);
+            this.toastMessage = `Duplicado: ${value.trim()}`;
+            await this.reloadDirectory(res.focusName);
+          } catch (err) {
+            this.toastMessage = err instanceof Error ? err.message : String(err);
+          }
         }
       } else if (kind === 'rename' && value.trim()) {
         const current = this.currentEntries[this.selectedIndex];
@@ -450,6 +480,76 @@ export class ExploreioApp {
     }
   }
 
+  private async handleCreateModalKey(ev: KeyEvent): Promise<void> {
+    const modal = this.createModal;
+    if (!modal) return;
+
+    if (ev.name === 'escape') {
+      this.createModal = null;
+      this.draw();
+      return;
+    }
+
+    if (modal.mode === 'file') {
+      if (ev.name === 'tab') {
+        cycleModalExtension(modal, ev.shift ? -1 : 1);
+        this.draw();
+        return;
+      }
+      if (ev.name === 'up' || ev.name === 'down') {
+        cycleModalExtension(modal, ev.name === 'up' ? -1 : 1);
+        this.draw();
+        return;
+      }
+      if (ev.ctrl && ev.name === 'e') {
+        modal.openInEditor = !modal.openInEditor;
+        this.draw();
+        return;
+      }
+    }
+
+    if (ev.name === 'enter') {
+      const targetName = resolveModalTargetName(modal);
+      if (!targetName) {
+        modal.errorMessage = 'Informe um nome antes de confirmar.';
+        this.draw();
+        return;
+      }
+      try {
+        const shouldOpenEditor = modal.mode === 'file' && modal.openInEditor;
+        const res =
+          modal.mode === 'file'
+            ? await createFileSafe(this.currentDir, targetName)
+            : await createFolderSafe(this.currentDir, targetName);
+        this.createModal = null;
+        this.toastMessage =
+          modal.mode === 'file' ? `Arquivo criado: ${targetName}` : `Pasta criada: ${targetName}`;
+        await this.reloadDirectory(res.focusName);
+        if (shouldOpenEditor) {
+          await this.openFileInEditor(res.targetPath, 'browser');
+          return;
+        }
+      } catch (err) {
+        modal.errorMessage = err instanceof Error ? err.message : String(err);
+      }
+      this.draw();
+      return;
+    }
+
+    if (ev.name === 'backspace') {
+      modal.input = modal.input.slice(0, -1);
+      modal.errorMessage = '';
+      this.draw();
+      return;
+    }
+
+    if (ev.char && !ev.ctrl) {
+      modal.input += ev.char;
+      modal.errorMessage = '';
+      this.draw();
+    }
+  }
+
   private async handleBrowserKey(ev: KeyEvent): Promise<void> {
     this.toastMessage = '';
     const maxIdx = Math.max(0, this.currentEntries.length - 1);
@@ -484,6 +584,24 @@ export class ExploreioApp {
     if (this.keybinds.matches('browser.filter', ev)) {
       this.promptKind = 'filter';
       this.promptInput = this.filterQuery;
+      this.draw();
+      return;
+    }
+    if (this.keybinds.matches('browser.createFile', ev)) {
+      this.createModal = createInitialModalState('file');
+      this.draw();
+      return;
+    }
+    if (this.keybinds.matches('browser.createFolder', ev)) {
+      this.createModal = createInitialModalState('folder');
+      this.draw();
+      return;
+    }
+    if (this.keybinds.matches('browser.duplicateEntry', ev) && this.currentEntries[this.selectedIndex]) {
+      const current = this.currentEntries[this.selectedIndex]!;
+      const existingNames = new Set(this.currentEntries.map((e) => e.name));
+      this.promptKind = 'duplicate';
+      this.promptInput = suggestDuplicateName(existingNames, current.name, current.isDirectory);
       this.draw();
       return;
     }
@@ -1039,6 +1157,11 @@ export class ExploreioApp {
               ? this.buildReaderFrame(width, height, theme)
               : this.buildBrowserFrame(width, height, theme);
 
+    if (this.createModal) {
+      const modalLines = renderCreateEntryModalOverlay(this.createModal, this.currentDir, width, height, theme);
+      applyModalOverlay(lines, modalLines, height);
+    }
+
     if (this.showHelp) {
       this.overlayHelpModal(lines, width, height, theme);
     }
@@ -1176,6 +1299,7 @@ export class ExploreioApp {
         filter: 'Filtrar arquivos: ',
         search: 'Buscar no arquivo: ',
         create: 'Criar arquivo ou pasta/ : ',
+        duplicate: 'Duplicar para: ',
         rename: 'Renomear para: ',
         delete: `Excluir "${this.currentEntries[this.selectedIndex]?.name ?? ''}"? (y/N): `,
         'git-commit': 'git commit -m : ',
@@ -1248,7 +1372,8 @@ export class ExploreioApp {
       row(k('browser.filter'), 'Filtrar arquivos (fuzzy)'),
       row(k('browser.toggleHidden'), 'Mostrar/ocultar arquivos ocultos'),
       row(k('browser.copyPath'), 'Copiar caminho selecionado (arquivo ou pasta)'),
-      row(`${k('browser.createEntry')} / ${k('browser.renameEntry')} / ${k('browser.deleteEntry')}`, 'Criar / Renomear / Excluir (com confirmação)'),
+      row(`${k('browser.createFile')} / ${k('browser.createFolder')}`, 'Novo arquivo (com extensão) / Nova pasta cross-OS'),
+      row(`${k('browser.duplicateEntry')} / ${k('browser.renameEntry')} / ${k('browser.deleteEntry')}`, 'Duplicar / Renomear / Excluir (com confirmação)'),
       row(k('browser.openGitPanel'), 'Abrir PAINEL GIT / GITHUB (status, árvore, branches, PRs)'),
       '',
       '  PAINEL GIT / GITHUB',
