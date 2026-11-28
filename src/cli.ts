@@ -25,7 +25,7 @@ import { fg, getTheme, type ThemeName, type ThemePalette } from './themes/palett
 import { BOLD, DIM, RESET } from './tui/ansi.js';
 import { ExploreioApp } from './tui/app.js';
 
-export const VERSION = '0.7.0';
+export const VERSION = '0.8.0';
 
 export function loadSavedDefaultTheme(): ThemeName {
   try {
@@ -167,8 +167,8 @@ export function getHelpText(
     `  ${cmd(k('browser.parentDir'))}  Subir diretório            ${cmd(k('reader.toggleMode'))}  Alternar modo no Leitor`,
     `  ${cmd(k('browser.openFullscreen'))}  Abrir em shell Fullscreen  ${cmd(k('browser.openEditor'))}  Abrir no Editor Vim nativo`,
     `  ${cmd(k('browser.filter'))}  Filtrar / Buscar (n/N)     ${cmd(k('global.cycleTheme'))}  Trocar tema`,
-    `  ${cmd(k('browser.openGitPanel'))}  Painel Git & GitHub        ${cmd(`${k('browser.createEntry')}/${k('browser.renameEntry')}/${k('browser.deleteEntry')}`)}  Criar / Renomear / Excluir`,
-    `  ${cmd(k('browser.copyPath'))}  Copiar caminho (path)      ${cmd(k('browser.toggleHidden'))}  Alternar arquivos ocultos`,
+    `  ${cmd(k('browser.openGitPanel'))}  Painel Git & GitHub        ${cmd(`${k('browser.createFile')} / ${k('browser.createFolder')}`)}  Novo arquivo (ext) / Nova pasta`,
+    `  ${cmd(`${k('browser.duplicateEntry')}/${k('browser.renameEntry')}/${k('browser.deleteEntry')}`)}  Duplicar/Renomear/Excluir  ${cmd(k('browser.copyPath'))}  Copiar path · ${cmd(k('browser.toggleHidden'))} Ocultos`,
     `  ${cmd(k('global.openKeybinds'))}  Painel de Edição de Binds  ${cmd(k('global.help'))}  Ajuda · ${cmd(k('global.quit'))} Sair`,
     '',
     h('CUSTOMIZAÇÃO DE KEYBINDS'),

@@ -16,6 +16,7 @@ Um gerenciador de arquivos para CLI/terminal inspirado no **Yazi**, projetado pa
 - **Editor Modal Estilo Vim Nativo (`e`):** edite qualquer arquivo de texto/código diretamente dentro do Exploreio com modos `NORMAL`, `INSERT`, `VISUAL`/`V-LINE`, `COMMAND` (`:w`, `:wq`, `:q!`, `:<linha>`) e `SEARCH` (`/`), undo/redo (`u`/`Ctrl+r`), syntax highlighting e preservação de EOL (`\r\n`/`\n`).
 - **Painel Git & GitHub Nativo (`Tab` ou `Ctrl+G`):** badge discreto de branch/pendências no cabeçalho do navegador (`⎇ branch ↑N ●M`) + tela dedicada com 4 abas (**Status & Commits Parados**, **Árvore de Commits**, **Branches** e **GitHub PRs/Issues/Actions via `gh` CLI**), diff ao vivo, barra de botões rápidos e paleta interativa (`?`) para `git pull`, `git push`, `git fetch`, `git commit`, `git branch` e `git stash`.
 - **Keybinds 100% Customizáveis (`K` ou `Ctrl+K`):** personalize qualquer atalho pelo **Painel Interativo de Edição de Binds** direto na TUI (com captura de tecla ao vivo e detecção de conflitos) ou editando o arquivo de configuração base `~/.exploreiorc.json` (`exploreio --init-config`).
+- **Criação Rápida de Arquivos, Pastas & Duplicação Cross-OS (`n`, `N`/`m`, `c`):** modal interativo para criar arquivos com seletor rápido de extensões (`Tab`/`Shift+Tab`/`↑`/`↓`) ou escrita livre de extensão customizada, preview em tempo real e toggle `Ctrl+E` para criar e já abrir no Editor Vim; criação recursiva de subpastas (`a/b/c`) e duplicação segura incremental validada para Windows, macOS e Linux.
 - **3 Temas Oficiais de Terminal (`t`):** `midnight`, `parchment` (claro) e `nord` com detecção Truecolor / ANSI 256.
 - **Seguro por Padrão:** sanitização anti-ANSI-injection, limite de 2 MB contra OOM e confirmação obrigatória para exclusões.
 
@@ -81,7 +82,8 @@ A renderização de diagramas Mermaid no **Exploreio** é delegada ao pacote ofi
 | **Navegador** | `.` | Alternar arquivos ocultos |
 | **Navegador / Leitor** | `o` ou `F` | Abrir arquivo em **novo terminal em tela cheia** (ideal em painel splitado) |
 | **Navegador / Leitor** | `y` | Copiar caminho completo selecionado (arquivo ou pasta) |
-| **Navegador** | `a` / `r` / `d` | Criar / Renomear / Excluir (com confirmação) |
+| **Navegador** | `n` / `N` (`m`) | **Novo arquivo** (com seletor/escrita de extensão e abrir no Vim) / **Nova pasta** (subpastas cross-OS) |
+| **Navegador** | `c` / `a` / `r` / `d` | Duplicar / Criar rápido / Renomear / Excluir (com confirmação) |
 | **Navegador** | `Tab` ou `Ctrl+G` | Abrir **Painel Git & GitHub** (status, commits parados, árvore, branches e PRs) |
 | **Painel Git** | `1`–`4` / `Tab` · `↑`/`↓` · `J`/`K` | Trocar aba · selecionar item · rolar diff/detalhes |
 | **Painel Git** | `s`/`S`/`c` · `p`/`P`/`f`/`b` · `?` | Stage/All/Commit · Pull/Push/Fetch/+Branch · **Paleta de Comandos Rápidos** |

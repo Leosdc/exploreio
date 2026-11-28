@@ -7,6 +7,11 @@ e este projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR
 
 ---
 
+## [0.8.0] - 2026-11-28
+
+### Adicionado
+- **Keybinds Dedicados de Criação de Arquivos, Pastas, Seletor de Extensões & Duplicação Cross-OS (`n`, `N`/`m`, `c`):** novo modal interativo (`src/tui/createEntryModal.ts`) com seletor rápido de extensões (`Tab`/`Shift+Tab`/`↑`/`↓`), escrita livre de extensão customizada (sem duplicar extensão já digitada), preview em tempo real e toggle `Ctrl+E` para criar e já abrir no Editor Vim; criação recursiva de pastas aninhadas cross-OS (`a/b/c`), duplicação segura com sugestão incremental sem colisão e validação multiplataforma (`Windows`, `macOS`, `Linux`) em `src/fs/explorer.ts` (#26, #27).
+
 ## [0.7.0] - 2026-11-27
 
 ### Adicionado
