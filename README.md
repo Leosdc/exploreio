@@ -81,7 +81,8 @@ A renderização de diagramas Mermaid no **Exploreio** é delegada ao pacote ofi
 | **Navegador** | `.` | Alternar arquivos ocultos |
 | **Navegador / Leitor** | `o` ou `F` | Abrir arquivo em **novo terminal em tela cheia** (ideal em painel splitado) |
 | **Navegador / Leitor** | `y` | Copiar caminho completo selecionado (arquivo ou pasta) |
-| **Navegador** | `a` / `r` / `d` | Criar / Renomear / Excluir (com confirmação) |
+| **Navegador** | `n` / `N` (`m`) | **Novo arquivo** (com seletor/escrita de extensão e abrir no Vim) / **Nova pasta** (subpastas cross-OS) |
+| **Navegador** | `c` / `a` / `r` / `d` | Duplicar / Criar rápido / Renomear / Excluir (com confirmação) |
 | **Navegador** | `Tab` ou `Ctrl+G` | Abrir **Painel Git & GitHub** (status, commits parados, árvore, branches e PRs) |
 | **Painel Git** | `1`–`4` / `Tab` · `↑`/`↓` · `J`/`K` | Trocar aba · selecionar item · rolar diff/detalhes |
 | **Painel Git** | `s`/`S`/`c` · `p`/`P`/`f`/`b` · `?` | Stage/All/Commit · Pull/Push/Fetch/+Branch · **Paleta de Comandos Rápidos** |

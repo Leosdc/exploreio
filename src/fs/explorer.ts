@@ -196,23 +196,219 @@ export async function safeReadFilePreview(
   }
 }
 
+const WINDOWS_FORBIDDEN_CHARS_RE = /[<>:"|?*]/;
+const WINDOWS_RESERVED_NAME_RE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i;
+const CONTROL_CHARS_RE = /[\x00-\x1f\x7f]/;
+const MAX_SEGMENT_UTF8_BYTES = 255;
+
+export interface EntryValidationResult {
+  readonly ok: boolean;
+  readonly normalizedRelative?: string;
+  readonly resolvedTarget?: string;
+  readonly topLevelSegment?: string;
+  readonly error?: string;
+}
+
+export interface EntryCreationResult {
+  readonly targetPath: string;
+  readonly focusName: string;
+}
+
+function validateSegmentCrossPlatform(segment: string, platform: NodeJS.Platform): string | null {
+  if (!segment || segment === '.' || segment === '..') {
+    return 'Operação bloqueada: segmentos "." e ".." não são permitidos.';
+  }
+  if (CONTROL_CHARS_RE.test(segment)) {
+    return 'Nome inválido: contém caracteres de controle não permitidos.';
+  }
+  if (Buffer.byteLength(segment, 'utf8') > MAX_SEGMENT_UTF8_BYTES) {
+    return `Nome inválido: segmento excede o limite de ${MAX_SEGMENT_UTF8_BYTES} bytes UTF-8.`;
+  }
+  if (platform === 'win32') {
+    if (WINDOWS_FORBIDDEN_CHARS_RE.test(segment)) {
+      return 'Nome inválido no Windows: caracteres < > : " | ? * não são permitidos.';
+    }
+    if (segment.endsWith(' ') || segment.endsWith('.')) {
+      return 'Nome inválido no Windows: não pode terminar com ponto ou espaço.';
+    }
+    if (WINDOWS_RESERVED_NAME_RE.test(segment)) {
+      return `Nome reservado do Windows ("${segment}") não pode ser usado.`;
+    }
+  }
+  return null;
+}
+
+export function validateEntryPathCrossPlatform(
+  baseDir: string,
+  rawInput: string,
+  platform: NodeJS.Platform = process.platform,
+  options: { allowTrailingSlash?: boolean } = {}
+): EntryValidationResult {
+  const trimmed = rawInput.trim();
+  if (!trimmed) {
+    return { ok: false, error: 'Informe um nome válido.' };
+  }
+  if (CONTROL_CHARS_RE.test(trimmed)) {
+    return { ok: false, error: 'Nome inválido: contém caracteres de controle não permitidos.' };
+  }
+
+  const startsWithRoot =
+    trimmed.startsWith('/') ||
+    trimmed.startsWith('\\') ||
+    /^[a-zA-Z]:/.test(trimmed) ||
+    path.isAbsolute(trimmed) ||
+    path.posix.isAbsolute(trimmed) ||
+    path.win32.isAbsolute(trimmed);
+  if (startsWithRoot) {
+    return { ok: false, error: 'Nome inválido (use apenas caminho relativo seguro dentro da pasta atual).' };
+  }
+
+  const hasTrailingSep = trimmed.endsWith('/') || trimmed.endsWith('\\');
+  if (hasTrailingSep && !options.allowTrailingSlash) {
+    return { ok: false, error: 'Nome de arquivo não pode terminar com separador de pasta.' };
+  }
+
+  const withoutTrailing = hasTrailingSep ? trimmed.replace(/[/\\]+$/, '') : trimmed;
+  if (!withoutTrailing) {
+    return { ok: false, error: 'Informe um nome válido.' };
+  }
+
+  const segments = withoutTrailing.split(/[/\\]+/);
+  for (const seg of segments) {
+    const segErr = validateSegmentCrossPlatform(seg, platform);
+    if (segErr) return { ok: false, error: segErr };
+  }
+
+  const resolvedBase = path.resolve(baseDir);
+  const resolvedTarget = path.resolve(resolvedBase, ...segments);
+  const basePrefix = resolvedBase.endsWith(path.sep) ? resolvedBase : `${resolvedBase}${path.sep}`;
+  if (resolvedTarget === resolvedBase || !resolvedTarget.startsWith(basePrefix)) {
+    return { ok: false, error: 'Operação bloqueada: caminho fora do diretório ativo.' };
+  }
+
+  return {
+    ok: true,
+    normalizedRelative: segments.join(path.sep),
+    resolvedTarget,
+    topLevelSegment: segments[0],
+  };
+}
+
+function formatFsCreationError(err: unknown): Error {
+  const code = (err as NodeJS.ErrnoException | undefined)?.code;
+  if (code === 'EEXIST' || code === 'ERR_FS_CP_EEXIST') {
+    return new Error('Já existe um arquivo ou pasta com esse nome.');
+  }
+  if (err instanceof Error) return err;
+  return new Error(String(err));
+}
+
+export async function createFileSafe(
+  baseDir: string,
+  rawRelativePath: string,
+  platform: NodeJS.Platform = process.platform
+): Promise<EntryCreationResult> {
+  const validation = validateEntryPathCrossPlatform(baseDir, rawRelativePath, platform, {
+    allowTrailingSlash: false,
+  });
+  if (!validation.ok || !validation.resolvedTarget || !validation.topLevelSegment) {
+    throw new Error(validation.error ?? 'Nome de arquivo inválido.');
+  }
+
+  try {
+    await fs.mkdir(path.dirname(validation.resolvedTarget), { recursive: true });
+    await fs.writeFile(validation.resolvedTarget, '', { flag: 'wx' });
+    return { targetPath: validation.resolvedTarget, focusName: validation.topLevelSegment };
+  } catch (err) {
+    throw formatFsCreationError(err);
+  }
+}
+
+export async function createFolderSafe(
+  baseDir: string,
+  rawRelativePath: string,
+  platform: NodeJS.Platform = process.platform
+): Promise<EntryCreationResult> {
+  const validation = validateEntryPathCrossPlatform(baseDir, rawRelativePath, platform, {
+    allowTrailingSlash: true,
+  });
+  if (!validation.ok || !validation.resolvedTarget || !validation.topLevelSegment) {
+    throw new Error(validation.error ?? 'Nome de pasta inválido.');
+  }
+
+  try {
+    await fs.stat(validation.resolvedTarget);
+    throw new Error('Já existe um arquivo ou pasta com esse nome.');
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException | undefined)?.code;
+    if (code !== 'ENOENT') throw formatFsCreationError(err);
+  }
+
+  try {
+    await fs.mkdir(validation.resolvedTarget, { recursive: true });
+    return { targetPath: validation.resolvedTarget, focusName: validation.topLevelSegment };
+  } catch (err) {
+    throw formatFsCreationError(err);
+  }
+}
+
+export function suggestDuplicateName(
+  existingNames: ReadonlySet<string>,
+  originalName: string,
+  isDirectory: boolean
+): string {
+  const lastDot = isDirectory ? -1 : originalName.lastIndexOf('.');
+  const hasExt = lastDot > 0;
+  const base = hasExt ? originalName.slice(0, lastDot) : originalName;
+  const ext = hasExt ? originalName.slice(lastDot) : '';
+
+  const firstCandidate = `${base}-copy${ext}`;
+  if (!existingNames.has(firstCandidate)) return firstCandidate;
+
+  for (let idx = 2; idx < 10_000; idx++) {
+    const candidate = `${base}-copy-${idx}${ext}`;
+    if (!existingNames.has(candidate)) return candidate;
+  }
+  return `${base}-copy-${Date.now()}${ext}`;
+}
+
+export async function duplicateEntrySafe(
+  sourcePath: string,
+  newRelativeName: string,
+  platform: NodeJS.Platform = process.platform
+): Promise<EntryCreationResult> {
+  const resolvedSource = path.resolve(sourcePath);
+  const parentDir = path.dirname(resolvedSource);
+  const validation = validateEntryPathCrossPlatform(parentDir, newRelativeName, platform, {
+    allowTrailingSlash: false,
+  });
+  if (!validation.ok || !validation.resolvedTarget || !validation.topLevelSegment) {
+    throw new Error(validation.error ?? 'Nome de destino inválido para duplicação.');
+  }
+
+  const target = validation.resolvedTarget;
+  const sourcePrefix = resolvedSource.endsWith(path.sep) ? resolvedSource : `${resolvedSource}${path.sep}`;
+  if (target === resolvedSource || target.startsWith(sourcePrefix)) {
+    throw new Error('Operação bloqueada: não é possível duplicar um item sobre si mesmo.');
+  }
+
+  try {
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.cp(resolvedSource, target, { recursive: true, force: false, errorOnExist: true });
+    return { targetPath: target, focusName: validation.topLevelSegment };
+  } catch (err) {
+    throw formatFsCreationError(err);
+  }
+}
+
 export async function createFileOrDir(baseDir: string, rawName: string): Promise<string> {
   const trimmed = rawName.trim();
-  if (!trimmed || trimmed.includes('..') || path.isAbsolute(trimmed)) {
-    throw new Error('Nome inválido (use apenas caminho relativo seguro dentro da pasta atual).');
-  }
-  const resolvedBase = path.resolve(baseDir);
-  const target = path.resolve(resolvedBase, trimmed);
-  if (target !== resolvedBase && !target.startsWith(`${resolvedBase}${path.sep}`)) {
-    throw new Error('Operação bloqueada: caminho fora do diretório ativo.');
-  }
   if (trimmed.endsWith('/') || trimmed.endsWith('\\')) {
-    await fs.mkdir(target, { recursive: true });
-  } else {
-    await fs.mkdir(path.dirname(target), { recursive: true });
-    await fs.writeFile(target, '', { flag: 'wx' });
+    const res = await createFolderSafe(baseDir, trimmed);
+    return res.targetPath;
   }
-  return target;
+  const res = await createFileSafe(baseDir, trimmed);
+  return res.targetPath;
 }
 
 export async function renameEntry(entryPath: string, newName: string): Promise<string> {

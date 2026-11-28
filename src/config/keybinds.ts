@@ -29,6 +29,9 @@ export type KeybindActionId =
   | 'browser.parentDir'
   | 'browser.filter'
   | 'browser.toggleHidden'
+  | 'browser.createFile'
+  | 'browser.createFolder'
+  | 'browser.duplicateEntry'
   | 'browser.createEntry'
   | 'browser.renameEntry'
   | 'browser.deleteEntry'
@@ -185,7 +188,10 @@ export const DEFAULT_KEYBIND_DEFINITIONS: readonly KeybindDefinition[] = [
   { id: 'browser.parentDir', context: 'browser', action: 'parentDir', label: 'Diretório pai', description: 'Volta para o diretório pai', defaultKeys: ['left', 'backspace', 'h'] },
   { id: 'browser.filter', context: 'browser', action: 'filter', label: 'Filtrar pasta', description: 'Ativa filtro fuzzy instantâneo no diretório atual', defaultKeys: ['/', 'f'] },
   { id: 'browser.toggleHidden', context: 'browser', action: 'toggleHidden', label: 'Arquivos ocultos', description: 'Exibe ou oculta arquivos iniciados por ponto', defaultKeys: ['.'] },
-  { id: 'browser.createEntry', context: 'browser', action: 'createEntry', label: 'Criar arquivo/pasta', description: 'Cria novo arquivo ou pasta (terminando com /)', defaultKeys: ['a'] },
+  { id: 'browser.createFile', context: 'browser', action: 'createFile', label: 'Novo arquivo', description: 'Abre modal para criar arquivo com seletor/escrita de extensão', defaultKeys: ['n'] },
+  { id: 'browser.createFolder', context: 'browser', action: 'createFolder', label: 'Nova pasta', description: 'Abre modal para criar pasta ou subpastas aninhadas cross-OS', defaultKeys: ['N', 'm'] },
+  { id: 'browser.duplicateEntry', context: 'browser', action: 'duplicateEntry', label: 'Duplicar item', description: 'Duplica o arquivo ou pasta selecionado com nome seguro', defaultKeys: ['c'] },
+  { id: 'browser.createEntry', context: 'browser', action: 'createEntry', label: 'Criar rápido (legado)', description: 'Prompt rápido para criar arquivo ou pasta (terminando com /)', defaultKeys: ['a'] },
   { id: 'browser.renameEntry', context: 'browser', action: 'renameEntry', label: 'Renomear', description: 'Renomeia o arquivo ou pasta selecionado', defaultKeys: ['r'] },
   { id: 'browser.deleteEntry', context: 'browser', action: 'deleteEntry', label: 'Excluir', description: 'Exclui o item selecionado (com confirmação)', defaultKeys: ['d'] },
   { id: 'browser.copyPath', context: 'browser', action: 'copyPath', label: 'Copiar caminho', description: 'Copia o caminho completo para a área de transferência', defaultKeys: ['y'] },
