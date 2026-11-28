@@ -25,7 +25,7 @@ import { fg, getTheme, type ThemeName, type ThemePalette } from './themes/palett
 import { BOLD, DIM, RESET } from './tui/ansi.js';
 import { ExploreioApp } from './tui/app.js';
 
-export const VERSION = '0.6.1';
+export const VERSION = '0.7.0';
 
 export function loadSavedDefaultTheme(): ThemeName {
   try {
